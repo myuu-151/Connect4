@@ -13,9 +13,13 @@ Licence: **CC-BY-4.0** — attribution required, commercial use allowed, no NoDe
 Parts: `MainFrame` (5,306 tris), `Chip_Red` (160), `Stack_Red` (1,120), `ReleaseTray` (68).
 A full board is roughly 12k triangles including 42 chips.
 
-Note on textures: `YellowChips` ships at 2048x2048 while `RedChips` is 256x256, for the same
-object. That is 64x the texture area for a disc seen at a couple of centimetres, and 16 MB as
-RGBA8 against Flipper's 1 MB texture cache. Downscale yellow to match red before cooking.
+Note on textures: `YellowChips` shipped at 2048x2048 while `RedChips` is 256x256, for the same
+object — 64x the texture area for a disc seen at a couple of centimetres, and 16 MB as RGBA8
+against Flipper's 1 MB texture cache. **Downscaled to 256x256 to match red**, in the loose
+files and in the copies packed inside each .blend (each blend carried three of them). Geometry
+and every other map are untouched; `BluePlastic` stays at 512x256.
+
+The originals are in git history if they are ever wanted at full size.
 
 ## Environments
 
