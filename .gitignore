@@ -1,0 +1,13 @@
+# Build output (the packager writes Packaged/, including Connect4.iso)
+Connect4/Intermediate/
+Connect4/Build/
+Connect4/Generated/
+Connect4/Packaged/
+Connect4/Makefile_TEMP
+__pycache__/
+
+# Blender's rolling backup of the previous save
+*.blend1
+
+# Editor scratch
+Connect4/Saves/

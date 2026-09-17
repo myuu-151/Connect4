@@ -1,0 +1,297 @@
+#include "Connect4Game.h"
+
+#include "InputDevices.h"
+#include "Log.h"
+
+void OctLog(const char* format, ...);
+
+namespace
+{
+
+const int32_t kPad = 0;             // player 1's controller
+
+// Cursor repeat: one step immediately, then a steady rate while held. Without this the cursor
+// either moves once per press (tedious across seven columns) or sprints (unusable).
+const float kRepeatDelay = 0.32f;
+const float kRepeatRate = 0.11f;
+
+const float kStickDeadzone = 0.5f;
+
+// How long a disc takes to fall before the rules-side move is considered settled. Once the
+// physics disc exists this becomes "when the rigid body sleeps" instead of a timer.
+const float kDropDuration = 0.55f;
+
+// A beat before the AI plays, so it does not answer instantly. Reads as thinking.
+const float kAIThinkTime = 0.45f;
+
+const char* ResultName(C4::Result r)
+{
+    switch (r)
+    {
+    case C4::Result::RedWins:  return "Red wins";
+    case C4::Result::BlueWins: return "Blue wins";
+    case C4::Result::Draw:     return "Draw";
+    default:                   return "Playing";
+    }
+}
+
+}   // anonymous namespace
+
+Connect4Game::Connect4Game()
+{
+}
+
+Connect4Game::~Connect4Game()
+{
+}
+
+bool Connect4Game::Initialize()
+{
+    const int failures = C4::RunSelfTest();
+    if (failures != 0)
+    {
+        // The rules are the one part that must never be subtly wrong, so they are checked on
+        // every boot. It costs well under a millisecond.
+        OctLog("Connect4: RULES SELF-TEST FAILED (%d)", failures);
+        LogError("Connect4: rules self-test failed");
+        return false;
+    }
+
+    NewGame();
+    OctLog("Connect4: initialized, rules self-test passed");
+    return true;
+}
+
+void Connect4Game::NewGame()
+{
+    mBoard.Reset();
+    mState = State::Playing;
+    mTurn = C4::Cell::Red;
+    mCursorCol = C4::kCols / 2;
+    mPendingMove = C4::Move();
+    mStateTime = 0.0f;
+    mDropTimer = 0.0f;
+    mAIThinkTimer = 0.0f;
+    mRepeatTimer = 0.0f;
+
+    OnCursorMoved(mCursorCol);
+}
+
+void Connect4Game::Update(float deltaTime)
+{
+    mStateTime += deltaTime;
+
+    if (!mLoggedFirstFrame)
+    {
+        mLoggedFirstFrame = true;
+        OctLog("Connect4: first frame");
+    }
+
+    switch (mState)
+    {
+    case State::Playing:   UpdatePlaying(deltaTime);   break;
+    case State::Dropping:  UpdateDropping(deltaTime);  break;
+    case State::GameOver:  UpdateGameOver(deltaTime);  break;
+    case State::Reracking: UpdateRerack(deltaTime);    break;
+    }
+}
+
+bool Connect4Game::IsAITurn() const
+{
+    return mMode == Mode::VersusAI && mTurn == C4::Cell::Blue;
+}
+
+void Connect4Game::UpdatePlaying(float deltaTime)
+{
+    if (IsAITurn())
+    {
+        mAIThinkTimer += deltaTime;
+        if (mAIThinkTimer >= kAIThinkTime)
+        {
+            mAIThinkTimer = 0.0f;
+            const int col = C4::AI::ChooseMove(mBoard, mTurn, *mDifficulty, mRandState);
+            if (col >= 0)
+            {
+                mCursorCol = col;
+                OnCursorMoved(mCursorCol);
+                TryDrop(col);
+            }
+        }
+        return;
+    }
+
+    // --- cursor ---------------------------------------------------------
+    int dir = 0;
+    const float stickX = GetGamepadAxisValue(GAMEPAD_AXIS_LTHUMB_X, kPad);
+
+    if (IsGamepadButtonJustDown(GAMEPAD_LEFT, kPad))
+        dir = -1;
+    else if (IsGamepadButtonJustDown(GAMEPAD_RIGHT, kPad))
+        dir = 1;
+
+    const bool holdingLeft = IsGamepadButtonDown(GAMEPAD_LEFT, kPad) || stickX < -kStickDeadzone;
+    const bool holdingRight = IsGamepadButtonDown(GAMEPAD_RIGHT, kPad) || stickX > kStickDeadzone;
+
+    if (dir == 0 && (holdingLeft || holdingRight))
+    {
+        mRepeatTimer -= deltaTime;
+        if (mRepeatTimer <= 0.0f)
+        {
+            dir = holdingLeft ? -1 : 1;
+            mRepeatTimer = kRepeatRate;
+        }
+    }
+    else if (dir != 0)
+    {
+        mRepeatTimer = kRepeatDelay;
+    }
+    else if (!holdingLeft && !holdingRight)
+    {
+        mRepeatTimer = 0.0f;
+    }
+
+    if (dir != 0)
+        MoveCursor(dir);
+
+    // --- drop -----------------------------------------------------------
+    if (IsGamepadButtonJustDown(GAMEPAD_A, kPad))
+    {
+        if (!TryDrop(mCursorCol))
+        {
+            // Full column. The presentation layer can buzz here.
+            OctLog("Connect4: column %d is full", mCursorCol);
+        }
+    }
+}
+
+void Connect4Game::MoveCursor(int delta)
+{
+    int col = mCursorCol;
+
+    // Skip full columns so the cursor never rests somewhere a disc cannot go.
+    for (int i = 0; i < C4::kCols; ++i)
+    {
+        col += delta;
+        if (col < 0) col = C4::kCols - 1;
+        if (col >= C4::kCols) col = 0;
+
+        if (mBoard.CanDrop(col))
+            break;
+    }
+
+    if (col != mCursorCol)
+    {
+        mCursorCol = col;
+        OnCursorMoved(mCursorCol);
+    }
+}
+
+bool Connect4Game::TryDrop(int col)
+{
+    const C4::Move move = mBoard.Drop(col, mTurn);
+    if (!move.Valid())
+        return false;
+
+    mPendingMove = move;
+    mState = State::Dropping;
+    mDropTimer = 0.0f;
+    mStateTime = 0.0f;
+
+    OnDiscDropped(move);
+    return true;
+}
+
+void Connect4Game::UpdateDropping(float deltaTime)
+{
+    mDropTimer += deltaTime;
+    if (mDropTimer < kDropDuration)
+        return;
+
+    OnDiscLanded(mPendingMove);
+
+    const C4::Result result = mBoard.GetResult();
+    if (result != C4::Result::Playing)
+    {
+        mState = State::GameOver;
+        mStateTime = 0.0f;
+        OnGameEnded(result);
+        OctLog("Connect4: game over -- %s in %d moves",
+               ResultName(result), mBoard.GetMoveCount());
+        return;
+    }
+
+    mTurn = C4::Other(mTurn);
+    mState = State::Playing;
+
+    // Keep the cursor on a column that can still take a disc.
+    if (!mBoard.CanDrop(mCursorCol))
+        MoveCursor(1);
+}
+
+void Connect4Game::UpdateGameOver(float deltaTime)
+{
+    (void)deltaTime;
+
+    if (IsGamepadButtonJustDown(GAMEPAD_A, kPad) ||
+        IsGamepadButtonJustDown(GAMEPAD_START, kPad))
+    {
+        StartRerack();
+    }
+}
+
+void Connect4Game::StartRerack()
+{
+    mState = State::Reracking;
+    mStateTime = 0.0f;
+    OnRerackStarted();
+    OctLog("Connect4: rerack");
+}
+
+void Connect4Game::UpdateRerack(float deltaTime)
+{
+    (void)deltaTime;
+
+    // Placeholder timing. Once the discs are rigid bodies this waits for them to leave the
+    // play area or fall asleep, rather than counting seconds.
+    const float kRerackDuration = 2.0f;
+
+    if (mStateTime >= kRerackDuration)
+        NewGame();
+}
+
+// ---------------------------------------------------------------------------
+// Presentation hooks
+//
+// Empty by design: the turn flow above is complete and testable without any of them. Each one
+// is where a model, a sound or a rigid body attaches.
+// ---------------------------------------------------------------------------
+
+void Connect4Game::OnCursorMoved(int col)
+{
+    (void)col;
+    // slide the held disc above the chosen column; tick sound
+}
+
+void Connect4Game::OnDiscDropped(const C4::Move& move)
+{
+    (void)move;
+    // release the disc: spawn the rigid body at the column mouth and let Bullet take it.
+    // move.mCol and move.mRow are already decided, so the physics only has to look right.
+}
+
+void Connect4Game::OnDiscLanded(const C4::Move& move)
+{
+    (void)move;
+    // clack; settle the disc into its exact slot so the stack stays tidy over a long game
+}
+
+void Connect4Game::OnGameEnded(C4::Result result)
+{
+    (void)result;
+    // highlight the four winning discs -- Board::GetWinningLine() has them
+}
+
+void Connect4Game::OnRerackStarted()
+{
+    // drop the floor away and wake every disc: the whole point of having Bullet in here
+}
