@@ -23,16 +23,16 @@ enum class Cell : uint8_t
 {
     Empty = 0,
     Red   = 1,
-    Blue  = 2,
+    Yellow = 2,
 };
 
-inline Cell Other(Cell p) { return (p == Cell::Red) ? Cell::Blue : Cell::Red; }
+inline Cell Other(Cell p) { return (p == Cell::Red) ? Cell::Yellow : Cell::Red; }
 
 enum class Result : uint8_t
 {
     Playing,
     RedWins,
-    BlueWins,
+    YellowWins,
     Draw,
 };
 

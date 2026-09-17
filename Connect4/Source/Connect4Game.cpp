@@ -29,7 +29,7 @@ const char* ResultName(C4::Result r)
     switch (r)
     {
     case C4::Result::RedWins:  return "Red wins";
-    case C4::Result::BlueWins: return "Blue wins";
+    case C4::Result::YellowWins: return "Yellow wins";
     case C4::Result::Draw:     return "Draw";
     default:                   return "Playing";
     }
@@ -98,7 +98,7 @@ void Connect4Game::Update(float deltaTime)
 
 bool Connect4Game::IsAITurn() const
 {
-    return mMode == Mode::VersusAI && mTurn == C4::Cell::Blue;
+    return mMode == Mode::VersusAI && mTurn == C4::Cell::Yellow;
 }
 
 void Connect4Game::UpdatePlaying(float deltaTime)

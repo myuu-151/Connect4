@@ -62,7 +62,7 @@ Move Board::Drop(int col, Cell player)
     // outward in four directions -- far cheaper than rescanning the whole board.
     if (CheckWinFrom(col, row, player))
     {
-        mResult = (player == Cell::Red) ? Result::RedWins : Result::BlueWins;
+        mResult = (player == Cell::Red) ? Result::RedWins : Result::YellowWins;
     }
     else if (IsFull())
     {
@@ -227,7 +227,7 @@ int Negamax(Board& board, Cell player, int depth, int alpha, int beta)
             return 0;
 
         const bool playerWon = (res == Result::RedWins && player == Cell::Red) ||
-                               (res == Result::BlueWins && player == Cell::Blue);
+                               (res == Result::YellowWins && player == Cell::Yellow);
 
         // Prefer winning sooner and losing later: without the depth term the search is happy to
         // postpone a forced win indefinitely, which looks like the AI toying with you.
@@ -370,7 +370,7 @@ int RunSelfTest()
         Check(b.NextRow(0) == 0, "empty column starts at row 0");
         Move m = b.Drop(0, Cell::Red);
         Check(m.Valid() && m.mRow == 0, "first disc lands on the bottom row");
-        m = b.Drop(0, Cell::Blue);
+        m = b.Drop(0, Cell::Yellow);
         Check(m.Valid() && m.mRow == 1, "second disc stacks");
 
         for (int i = 0; i < kRows; ++i)
@@ -392,17 +392,17 @@ int RunSelfTest()
     {
         Board b;
         b.Reset();
-        for (int c = 0; c < 4; ++c) b.Drop(c, Cell::Blue);
-        Check(b.GetResult() == Result::BlueWins, "four in a row wins");
+        for (int c = 0; c < 4; ++c) b.Drop(c, Cell::Yellow);
+        Check(b.GetResult() == Result::YellowWins, "four in a row wins");
     }
     {
         Board b;
         b.Reset();
         // staircase up to the right
         b.Drop(0, Cell::Red);
-        b.Drop(1, Cell::Blue); b.Drop(1, Cell::Red);
-        b.Drop(2, Cell::Blue); b.Drop(2, Cell::Blue); b.Drop(2, Cell::Red);
-        b.Drop(3, Cell::Blue); b.Drop(3, Cell::Blue); b.Drop(3, Cell::Blue);
+        b.Drop(1, Cell::Yellow); b.Drop(1, Cell::Red);
+        b.Drop(2, Cell::Yellow); b.Drop(2, Cell::Yellow); b.Drop(2, Cell::Red);
+        b.Drop(3, Cell::Yellow); b.Drop(3, Cell::Yellow); b.Drop(3, Cell::Yellow);
         Check(b.GetResult() == Result::Playing, "diagonal not complete yet");
         b.Drop(3, Cell::Red);
         Check(b.GetResult() == Result::RedWins, "rising diagonal wins");
@@ -413,7 +413,7 @@ int RunSelfTest()
         Board b;
         b.Reset();
         b.Drop(3, Cell::Red);
-        b.Drop(3, Cell::Blue);
+        b.Drop(3, Cell::Yellow);
         b.Undo(3);
         Check(b.Get(3, 1) == Cell::Empty, "undo clears the cell");
         Check(b.NextRow(3) == 1, "undo restores the height");
@@ -433,7 +433,7 @@ int RunSelfTest()
         b.Reset();
         b.Drop(0, Cell::Red); b.Drop(1, Cell::Red); b.Drop(2, Cell::Red);
         int score = 0;
-        Check(AI::BestMove(b, Cell::Blue, 4, score) == 3, "AI blocks four");
+        Check(AI::BestMove(b, Cell::Yellow, 4, score) == 3, "AI blocks four");
     }
 
     return sFailures;
