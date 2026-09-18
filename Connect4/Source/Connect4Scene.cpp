@@ -95,23 +95,47 @@ const float kToppleTime = 0.22f;       // how long a landed disc takes to fall f
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
 
-// The orientation a disc ends up in once it has fallen over: flat on the table, face up, turned by
-// some arbitrary amount so a heap of them does not look stamped from one mould.
+// Where a disc ends up once it has fallen over: face up, reached by the shortest tip from wherever
+// it currently is.
 //
-// Built from whichever model axis runs through the flat of the disc, rather than assuming the chip
-// was modelled facing any particular way.
-glm::quat FlatRotation(int32_t faceAxis, float yawDegrees)
+// Taking the shortest arc is what makes it look like falling rather than being turned. A disc
+// standing on its edge can fall either way, and the shortest arc follows whichever way it is
+// already leaning; a lean is added from the direction it is travelling, so one skidding across the
+// table falls the way it is going instead of picking a side arbitrarily.
+glm::quat ToppleRotation(const glm::quat& current, int32_t faceAxis, const glm::vec3& travel)
 {
-    glm::quat layDown;
+    // The face normal in the model's own axes, then in the world.
+    glm::vec3 localNormal(0.0f);
+    localNormal[glm::clamp(faceAxis, 0, 2)] = 1.0f;
 
-    switch (faceAxis)
+    glm::vec3 normal = current * localNormal;
+
+    const float normalLen = glm::length(normal);
+    normal = (normalLen > 0.0001f) ? (normal / normalLen) : glm::vec3(0.0f, 1.0f, 0.0f);
+
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+
+    // Either face can end up on top, so tip towards whichever is nearer; forcing a particular face
+    // upwards would make some discs turn most of the way round to get there.
+    glm::vec3 target = (glm::dot(normal, up) < 0.0f) ? -up : up;
+
+    glm::vec3 axis = glm::cross(normal, target);
+
+    if (glm::length(axis) < 0.001f)
     {
-    case 0:  layDown = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 0, 1)); break;
-    case 1:  layDown = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); break;
-    default: layDown = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0)); break;
+        // Already flat, or exactly upside down: nudge it with the direction of travel so the
+        // choice is not arbitrary.
+        axis = glm::cross(normal, glm::vec3(travel.x, 0.0f, travel.z));
+
+        if (glm::length(axis) < 0.001f)
+        {
+            axis = glm::vec3(1.0f, 0.0f, 0.0f);
+        }
     }
 
-    return glm::angleAxis(glm::radians(yawDegrees), glm::vec3(0, 1, 0)) * layDown;
+    const float angle = acosf(glm::clamp(glm::dot(normal, target), -1.0f, 1.0f));
+
+    return glm::angleAxis(angle, glm::normalize(axis)) * current;
 }
 
 // Smoothstep, for the cursor slide.
@@ -489,7 +513,9 @@ bool Connect4Scene::Initialize()
             }
 
             const glm::vec3 discSize = worldMax - worldMin;
-            mDiscRestOffset = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
+
+            mDiscHalfThickness = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
+            mDiscRadius = glm::max(glm::max(discSize.x, discSize.y), discSize.z) * 0.5f;
 
             // The thin direction is the one through the flat of the disc. Measured on the model's
             // own axes rather than in world, since that is the axis a rotation has to be built
@@ -504,6 +530,8 @@ bool Connect4Scene::Initialize()
                 mDiscFaceAxis = 2;
         }
     }
+
+    BuildObstacles();
 
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
              mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
@@ -917,7 +945,6 @@ void Connect4Scene::UpdateRerack(float deltaTime)
     {
         const float spacing = mLayout.GetRowSpacing();
         const float gravity = kRerackGravity * spacing;
-        const float restY = mTableY + mDiscRestOffset;
         const float restSpeed = kDiscRestSpeed * spacing;
 
         // The underside of the grid where it now stands, having been lifted. A disc is out of the
@@ -937,30 +964,44 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
             glm::vec3 pos = disc.mNode->GetWorldPosition();
 
-            // Settled, and finished falling over: leave it exactly where it stopped rather than
-            // letting it creep. A disc still toppling has to be allowed through -- it has already
-            // stopped moving, so skipping it here left it set up to fall over and never advanced,
-            // which is why they stayed standing on their edges.
-            const bool settled = (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed);
+            // How high the disc's centre sits when resting depends on how far over it is. On edge
+            // that is a radius; flat it is half its thickness. Interpolating between the two as it
+            // falls over is what lets it pivot down onto its face instead of hovering at one height
+            // and snapping.
+            const float toppleT = (disc.mFlatT < 0.0f) ? 0.0f : glm::min(disc.mFlatT, 1.0f);
+            const float restY = mTableY + glm::mix(mDiscRadius, mDiscHalfThickness, toppleT);
+
             const bool toppling = (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f);
+            const bool stopped = (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed);
 
-            if (settled && !toppling)
+            if (stopped && !toppling)
             {
-                continue;
-            }
-
-            if (settled)
-            {
-                // Only the topple is left to run.
-                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
-                disc.mNode->SetWorldRotation(
-                    glm::slerp(disc.mRotFrom, disc.mRotTo, EaseInOut(disc.mFlatT)));
-
-                anyMoving = true;
                 continue;
             }
 
             anyMoving = true;
+
+            // The topple runs on its own clock once it has started, whether or not the disc is
+            // still sliding. It begins the moment the disc touches down rather than after it has
+            // come to a complete stop, which is what made it look like a flick at the last second.
+            if (toppling)
+            {
+                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
+
+                // Accelerating rather than eased at both ends: something falling over starts slowly
+                // and arrives fast, and easing out made it settle as though it were being lowered.
+                const float fall = disc.mFlatT * disc.mFlatT;
+                disc.mNode->SetWorldRotation(glm::slerp(disc.mRotFrom, disc.mRotTo, fall));
+            }
+
+            if (stopped)
+            {
+                // Still toppling, but no longer moving: hold it on the table at the height its
+                // current lean calls for.
+                pos.y = restY;
+                disc.mNode->SetWorldPosition(pos);
+                continue;
+            }
 
             // Clear of the board? Then it can start to spread. Until it is, only gravity acts on
             // it, so it drops down the column and out through the bottom.
@@ -977,6 +1018,10 @@ void Connect4Scene::UpdateRerack(float deltaTime)
             disc.mVelocity.y -= gravity * deltaTime;
             pos += disc.mVelocity * deltaTime;
 
+            // Anything in the way: the stand's feet sit on the table exactly where the discs
+            // spread out to.
+            PushOutOfObstacles(pos, disc.mVelocity);
+
             if (pos.y < restY)
             {
                 pos.y = restY;
@@ -988,19 +1033,19 @@ void Connect4Scene::UpdateRerack(float deltaTime)
                 disc.mVelocity.z *= kDiscFriction;
                 disc.mSpin *= kDiscFriction;
 
+                // Start falling over on contact. A disc arrives on its edge, the way it sat in its
+                // slot, and the moment an edge touches the table it is already going over -- so the
+                // topple belongs here, at the first touch, not after it has finished sliding.
+                if (disc.mFlatT < 0.0f)
+                {
+                    disc.mRotFrom = disc.mNode->GetWorldRotationQuat();
+                    disc.mRotTo = ToppleRotation(disc.mRotFrom, mDiscFaceAxis, disc.mVelocity);
+                    disc.mFlatT = 0.0f;
+                }
+
                 if (glm::abs(disc.mVelocity.y) < restSpeed)
                 {
-                    disc.mVelocity = glm::vec3(0.0f);
-                    disc.mSpin = 0.0f;
-
-                    // Down flat. A disc leaves the board standing on edge, the way it sat in its
-                    // slot, and a disc on edge does not stay there.
-                    if (disc.mFlatT < 0.0f)
-                    {
-                        disc.mRotFrom = disc.mNode->GetWorldRotationQuat();
-                        disc.mRotTo = FlatRotation(mDiscFaceAxis, disc.mSpin + float(i) * 37.0f);
-                        disc.mFlatT = 0.0f;
-                    }
+                    disc.mVelocity.y = 0.0f;
                 }
             }
 
@@ -1021,6 +1066,11 @@ void Connect4Scene::UpdateRerack(float deltaTime)
                     glm::slerp(disc.mRotFrom, disc.mRotTo, EaseInOut(disc.mFlatT)));
             }
         }
+
+        // Once everything has moved, push apart anything that ended up overlapping. Done as a
+        // pass over the whole set rather than inside the movement loop, so a disc moved by the
+        // separation is not then moved again by its own update in the same frame.
+        SeparateDiscs();
 
         // Move on once they have stopped, rather than after a fixed time, so the board is never
         // reset out from under a disc still rolling. The time limit is only a backstop.
@@ -1048,6 +1098,220 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
     default:
         break;
+    }
+}
+
+// Keep the discs out of one another. They are circles lying on a table, so overlap is a distance
+// in the plane of the table and nothing more elaborate is called for: a pair that is too close is
+// pushed apart along the line between them, each taking half.
+//
+// Only discs at roughly the same height are compared, so one that has come to rest on top of
+// another is left where it is rather than being shoved sideways off it.
+//
+// Forty-two discs is 861 pairs, which is nothing for the second or so a rerack lasts.
+void Connect4Scene::SeparateDiscs()
+{
+    const uint32_t kNumDiscs = C4::kCols * C4::kRows;
+    const float minDistance = mDiscRadius * 2.0f;
+    const float sameLevel = glm::max(mDiscHalfThickness * 2.0f, 0.0001f);
+
+    for (uint32_t i = 0; i < kNumDiscs; ++i)
+    {
+        if (!mDiscs[i].mInUse || mDiscs[i].mNode == nullptr)
+        {
+            continue;
+        }
+
+        for (uint32_t j = i + 1; j < kNumDiscs; ++j)
+        {
+            if (!mDiscs[j].mInUse || mDiscs[j].mNode == nullptr)
+            {
+                continue;
+            }
+
+            glm::vec3 a = mDiscs[i].mNode->GetWorldPosition();
+            glm::vec3 b = mDiscs[j].mNode->GetWorldPosition();
+
+            if (glm::abs(a.y - b.y) > sameLevel)
+            {
+                continue;
+            }
+
+            const float dx = a.x - b.x;
+            const float dz = a.z - b.z;
+            const float dist2 = dx * dx + dz * dz;
+
+            if (dist2 >= minDistance * minDistance)
+            {
+                continue;
+            }
+
+            float dist = sqrtf(dist2);
+            glm::vec3 push;
+
+            if (dist > 0.0001f)
+            {
+                push = glm::vec3(dx / dist, 0.0f, dz / dist);
+            }
+            else
+            {
+                // Exactly on top of each other: any direction will do, but it has to be a
+                // consistent one or the pair will jitter.
+                push = glm::vec3(1.0f, 0.0f, 0.0f);
+                dist = 0.0f;
+            }
+
+            const float overlap = (minDistance - dist) * 0.5f;
+
+            a += push * overlap;
+            b -= push * overlap;
+
+            mDiscs[i].mNode->SetWorldPosition(a);
+            mDiscs[j].mNode->SetWorldPosition(b);
+
+            // Take some speed out of the pair, so a crowd settles instead of shuffling.
+            mDiscs[i].mVelocity.x *= kDiscFriction;
+            mDiscs[i].mVelocity.z *= kDiscFriction;
+            mDiscs[j].mVelocity.x *= kDiscFriction;
+            mDiscs[j].mVelocity.z *= kDiscFriction;
+        }
+    }
+}
+
+void Connect4Scene::BuildObstacles()
+{
+    mNumObstacles = 0;
+
+    StaticMesh3D* standMesh = (mStandNode != nullptr) ? mStandNode->As<StaticMesh3D>() : nullptr;
+
+    if (standMesh == nullptr || standMesh->GetStaticMesh() == nullptr)
+    {
+        return;
+    }
+
+    StaticMesh* mesh = standMesh->GetStaticMesh();
+    const uint32_t numVerts = mesh->GetNumVertices();
+
+    if (numVerts == 0)
+    {
+        return;
+    }
+
+    const glm::mat4& toWorld = mStandNode->GetTransform();
+
+    // Only the part of the stand that is down near the table matters. A disc skidding across the
+    // table can hit a foot; it is never high enough to reach the uprights, and taking the whole
+    // stand would put a wall across the middle of the table where the discs are supposed to land.
+    glm::vec3 standMin(1e9f);
+    glm::vec3 standMax(-1e9f);
+
+    const bool hasColor = mesh->HasVertexColor();
+    const VertexColor* colorVerts = hasColor ? mesh->GetColorVertices() : nullptr;
+    const Vertex* plainVerts = hasColor ? nullptr : mesh->GetVertices();
+
+    for (uint32_t v = 0; v < numVerts; ++v)
+    {
+        const glm::vec3 local = hasColor ? colorVerts[v].mPosition : plainVerts[v].mPosition;
+        const glm::vec3 world = glm::vec3(toWorld * glm::vec4(local, 1.0f));
+
+        standMin = glm::min(standMin, world);
+        standMax = glm::max(standMax, world);
+    }
+
+    const float footTop = standMin.y + (standMax.y - standMin.y) * 0.22f;
+    const float middleX = (standMin.x + standMax.x) * 0.5f;
+
+    // One box per side. Splitting on the stand's own middle separates the two feet without having
+    // to work out where either of them is.
+    glm::vec3 lo[2] = { glm::vec3(1e9f), glm::vec3(1e9f) };
+    glm::vec3 hi[2] = { glm::vec3(-1e9f), glm::vec3(-1e9f) };
+    uint32_t counts[2] = { 0, 0 };
+
+    for (uint32_t v = 0; v < numVerts; ++v)
+    {
+        const glm::vec3 local = hasColor ? colorVerts[v].mPosition : plainVerts[v].mPosition;
+        const glm::vec3 world = glm::vec3(toWorld * glm::vec4(local, 1.0f));
+
+        if (world.y > footTop)
+        {
+            continue;
+        }
+
+        const uint32_t side = (world.x < middleX) ? 0u : 1u;
+
+        lo[side] = glm::min(lo[side], world);
+        hi[side] = glm::max(hi[side], world);
+        counts[side]++;
+    }
+
+    for (uint32_t side = 0; side < 2; ++side)
+    {
+        if (counts[side] < 8)
+        {
+            continue;
+        }
+
+        mObstacles[mNumObstacles].mMin = lo[side];
+        mObstacles[mNumObstacles].mMax = hi[side];
+        mNumObstacles++;
+    }
+
+    LogDebug("C4: %u stand obstacle(s)", mNumObstacles);
+}
+
+void Connect4Scene::PushOutOfObstacles(glm::vec3& pos, glm::vec3& velocity) const
+{
+    for (uint32_t i = 0; i < mNumObstacles; ++i)
+    {
+        const Obstacle& box = mObstacles[i];
+
+        // Give the box the disc's radius, so the disc stops when its edge meets the foot rather
+        // than when its centre does.
+        const float r = mDiscRadius;
+
+        if (pos.x < box.mMin.x - r || pos.x > box.mMax.x + r ||
+            pos.z < box.mMin.z - r || pos.z > box.mMax.z + r ||
+            pos.y > box.mMax.y + r)
+        {
+            continue;
+        }
+
+        // Push out along whichever face is nearest, so a disc arriving at a side slides off it
+        // rather than being shoved along the axis it happened to be travelling.
+        const float dxMin = pos.x - (box.mMin.x - r);
+        const float dxMax = (box.mMax.x + r) - pos.x;
+        const float dzMin = pos.z - (box.mMin.z - r);
+        const float dzMax = (box.mMax.z + r) - pos.z;
+        const float dyTop = (box.mMax.y + r) - pos.y;
+
+        const float smallest = glm::min(glm::min(glm::min(dxMin, dxMax), glm::min(dzMin, dzMax)), dyTop);
+
+        if (smallest == dyTop)
+        {
+            // Resting on top of the foot.
+            pos.y = box.mMax.y + r;
+            velocity.y = glm::max(velocity.y, 0.0f);
+        }
+        else if (smallest == dxMin)
+        {
+            pos.x = box.mMin.x - r;
+            velocity.x = -velocity.x * kDiscRestitution;
+        }
+        else if (smallest == dxMax)
+        {
+            pos.x = box.mMax.x + r;
+            velocity.x = -velocity.x * kDiscRestitution;
+        }
+        else if (smallest == dzMin)
+        {
+            pos.z = box.mMin.z - r;
+            velocity.z = -velocity.z * kDiscRestitution;
+        }
+        else
+        {
+            pos.z = box.mMax.z + r;
+            velocity.z = -velocity.z * kDiscRestitution;
+        }
     }
 }
 

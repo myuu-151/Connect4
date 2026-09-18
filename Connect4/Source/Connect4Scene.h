@@ -112,6 +112,9 @@ private:
 
     void UpdateRerack(float deltaTime);
     void ResetBoardParts();
+    void BuildObstacles();
+    void PushOutOfObstacles(glm::vec3& pos, glm::vec3& velocity) const;
+    void SeparateDiscs();
 
     Connect4Layout mLayout;
 
@@ -180,11 +183,28 @@ private:
     // Where a disc comes to rest once it has fallen out: the top of the table, which is the
     // bottom of the stand.
     float mTableY = 0.0f;
-    float mDiscRestOffset = 0.0f;
 
-    // Which of the chip model's local axes runs through the flat of the disc. Needed to lay one
-    // down on the table, since the model is free to be built along any of them.
+    // A disc standing on its edge rests a radius above the table; lying flat it rests half its
+    // thickness above it. Both are needed, because it arrives on edge and ends up flat, and the
+    // height has to follow it down as it falls over.
+    float mDiscRadius = 0.0f;
+    float mDiscHalfThickness = 0.0f;
+
+    // Which of the chip model's local axes runs through the flat of the disc. Needed to work out
+    // which way it is facing, since the model is free to be built along any of them.
     int32_t mDiscFaceAxis = 2;
+
+    // The stand's feet, as boxes on the table. Discs spread out to exactly where these sit, and
+    // without them they slid straight through. Two, because the stand has a foot at each end;
+    // measured from the model so they follow it if it is moved or rescaled.
+    struct Obstacle
+    {
+        glm::vec3 mMin = glm::vec3(0.0f);
+        glm::vec3 mMax = glm::vec3(0.0f);
+    };
+
+    Obstacle mObstacles[2];
+    uint32_t mNumObstacles = 0;
 
     // The underside of the frame, unlifted. A disc is still inside the board until it is below
     // this plus however far the grid has risen.
