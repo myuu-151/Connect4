@@ -354,7 +354,44 @@ bool Connect4Scene::Initialize()
     // stopped there looking stuck, which is indistinguishable from the fall being broken. Start
     // from a height that is clearly under the board and let the stand refine it.
     const float bottomRowY = mLayout.GetStillPoint(0, 0).y;
-    mTableY = bottomRowY - mLayout.GetRowSpacing() * 1.5f;
+
+    // Anchor on the frame's own bottom rather than on the bottom row. The row is only a few
+    // centimetres above the base of the frame, so a fallback measured from it lands the discs
+    // inside the board -- which is what "a bit below the board" turned out to mean in practice.
+    // The frame's extent is measured the same way the hole positions are, and those are demonstrably
+    // right, so it is the one distance here that can be relied on.
+    float frameBottomY = bottomRowY;
+    float frameHeightWorld = mLayout.GetRowSpacing() * float(C4::kRows);
+
+    {
+        const glm::mat4& frameToWorld = mFrameNode->GetTransform();
+
+        glm::vec3 fMin(0.0f);
+        glm::vec3 fMax(0.0f);
+
+        if (MeasureMeshBounds(mFrameNode->GetStaticMesh(), fMin, fMax))
+        {
+            float lowest = 1e9f;
+            float highest = -1e9f;
+
+            for (int c = 0; c < 8; ++c)
+            {
+                const glm::vec3 corner(
+                    (c & 1) ? fMax.x : fMin.x,
+                    (c & 2) ? fMax.y : fMin.y,
+                    (c & 4) ? fMax.z : fMin.z);
+
+                const float y = glm::vec3(frameToWorld * glm::vec4(corner, 1.0f)).y;
+                lowest = glm::min(lowest, y);
+                highest = glm::max(highest, y);
+            }
+
+            frameBottomY = lowest;
+            frameHeightWorld = highest - lowest;
+        }
+    }
+
+    mTableY = frameBottomY - frameHeightWorld * 0.20f;
 
     if (mStandNode != nullptr)
     {
@@ -381,18 +418,18 @@ bool Connect4Scene::Initialize()
                 lowest = glm::min(lowest, glm::vec3(standToWorld * glm::vec4(corner, 1.0f)).y);
             }
 
-            // Only trust it if it is actually below the board. A stand that measures level with
-            // or above the bottom row means something is not what it was assumed to be -- the
-            // wrong node found, or a mesh in an unexpected space -- and using it would wedge every
-            // disc inside the frame.
-            if (lowest < bottomRowY)
+            // Only trust it if it is below the bottom of the FRAME, not merely below the bottom
+            // row. The row sits just above the frame's base, so "below the bottom row" is a test
+            // almost anything passes, including a measurement that still leaves the discs inside
+            // the board.
+            if (lowest < frameBottomY)
             {
                 mTableY = lowest;
             }
             else
             {
-                LogWarning("Connect4: stand measured at or above the board (%.3f vs %.3f); "
-                           "using a fallback table height.", lowest, bottomRowY);
+                LogWarning("Connect4: stand measured above the frame base (%.3f vs %.3f); "
+                           "using a fallback table height.", lowest, frameBottomY);
             }
         }
     }
@@ -410,8 +447,8 @@ bool Connect4Scene::Initialize()
         }
     }
 
-    LogDebug("C4: lift %.2f pull %.2f tableY %.2f rowY0 %.2f discOff %.3f",
-             mLiftDistance, mTrayDistance, mTableY, bottomRowY, mDiscRestOffset);
+    LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
+             mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
 
     // Prefer a real yellow chip if one has been put in the scene, so its own texture is used
     // rather than an approximation of it.
