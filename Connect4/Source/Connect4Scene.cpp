@@ -97,7 +97,7 @@ const float kPullDepthMul = 2.2f;
 // How much of the world's gravity the discs feel. Below 1 because the board is only centimetres
 // across in world units: at full gravity a disc falls its own height in a few hundredths of a
 // second, which is correct and unwatchable.
-const float kDiscGravityScale = 0.30f;
+const float kDiscGravityScale = 0.55f;
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
@@ -937,6 +937,10 @@ void Connect4Scene::UpdateRerack(float deltaTime)
         if (!mDiscPhysicsRunning)
         {
             StartDiscPhysics();
+
+            // Here rather than when the grid starts to lift: this is the moment the discs actually
+            // come out, which is what the sound is of.
+            PlayRerackSound();
         }
 
         // Give them a moment before checking: they start slow, and asking immediately would find
@@ -1321,7 +1325,6 @@ void Connect4Scene::BeginRerack()
     mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
 
-    PlayRerackSound();
     HideCursorDisc();
 
     // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
@@ -1402,18 +1405,17 @@ void Connect4Scene::BeginRerack()
         // The spread is held here and applied the moment it clears the frame.
         disc.mVelocity = glm::vec3(0.0f);
 
-        // Spread mostly across the table rather than towards the player. Sending them at the
-        // camera walked the front row into the near clip plane, which cuts geometry on a flat
-        // plane square to the view and sliced the closest discs in half. There is also far more
-        // table to land on sideways than there is in front of the board.
+        // Barely a push. Discs tipping out of a rack are not thrown anywhere -- they drop, and
+        // they scatter because they catch each other and the tray on the way out. Launching them
+        // was left over from the hand-written fall, which had no contacts and so had to fake the
+        // spread; with Bullet doing the work it only made all forty-two set off in the same
+        // direction at once, which is what "moving as a group" was.
         //
-        // Fast enough to travel: the fall out of the board lasts under a second, so a drift of a
-        // fraction of a cell per second moves a disc less than its own radius.
-        // Less push than the hand-written version needed: with gravity eased off they are in the
-        // air for longer, so the same speed carries them a good deal further.
-        disc.mFrom = mSpillAxis * (spacing * 0.5f)
-                   + mSpreadAxis * (rx * spacing * 2.2f)
-                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.4f);
+        // What remains is a nudge to break the symmetry, so they do not fall in perfect lockstep
+        // out of a perfectly regular grid.
+        disc.mFrom = mSpreadAxis * (rx * spacing * 0.35f)
+                   + mSpillAxis * (spacing * 0.1f)
+                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.2f);
 
     }
 }
