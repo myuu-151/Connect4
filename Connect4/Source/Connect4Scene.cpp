@@ -113,7 +113,7 @@ const float kDiscMaxLiveTime = 8.0f;
 //
 // Releasing them a few at a time is also closer to what a real board does. It does not empty in one
 // instant -- the bottom row goes first and the rest follow it down.
-const uint32_t kMaxLiveDiscs = 10;
+const uint32_t kMaxLiveDiscs = 20;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
@@ -1229,16 +1229,39 @@ void Connect4Scene::UpdateDiscRelease()
         }
     }
 
-    for (uint32_t i = 0; i < C4::kCols * C4::kRows && live < kMaxLiveDiscs; ++i)
+    // Lowest first, so the board comes apart from the bottom the way a real one does.
+    //
+    // The order used to be whatever order the discs were played in, which is scattered all over the
+    // board -- discs let go from the middle of a column while the ones beneath them stayed put, so
+    // it read as discs being picked out rather than a board emptying. Which disc is where is known
+    // from its resting place, so release follows that instead.
+    while (live < kMaxLiveDiscs)
     {
-        Disc& disc = mDiscs[i];
+        int32_t lowest = -1;
+        float lowestY = 0.0f;
 
-        if (!disc.mAwaitingRelease || !disc.mInUse || disc.mNode == nullptr)
+        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
         {
-            continue;
+            const Disc& disc = mDiscs[i];
+
+            if (!disc.mAwaitingRelease || !disc.mInUse || disc.mNode == nullptr)
+            {
+                continue;
+            }
+
+            if (lowest < 0 || disc.mTo.y < lowestY)
+            {
+                lowest = (int32_t)i;
+                lowestY = disc.mTo.y;
+            }
         }
 
-        ReleaseDisc(disc, i);
+        if (lowest < 0)
+        {
+            break;
+        }
+
+        ReleaseDisc(mDiscs[lowest], (uint32_t)lowest);
         live++;
     }
 }
