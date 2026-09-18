@@ -107,13 +107,18 @@ const float kDiscMaxLiveTime = 8.0f;
 
 // How many discs are simulated at once.
 //
-// Not a performance figure but a hard limit: Bullet allocates solver bodies and contact arrays for
-// every body in an island, and forty-two discs landing in one heap asks for more memory than there
-// is. It ran out inside the solver and wrote through a failed allocation.
+// Not a performance figure but a memory limit. Bullet allocates solver bodies and contact arrays
+// for every body in an island, and a heap of discs settling together is one island; somewhere
+// around thirty-nine of them the allocation fails, and it fails by writing through a null pointer
+// rather than by complaining.
 //
-// Releasing them a few at a time is also closer to what a real board does. It does not empty in one
-// instant -- the bottom row goes first and the rest follow it down.
-const uint32_t kMaxLiveDiscs = 20;
+// So this is set just under where it breaks rather than comfortably below it. Most games do not
+// fill the board anyway -- a win usually lands well before forty-two discs are down -- so in
+// practice the whole board goes at once and the queue never comes into it. Only a draw, or very
+// nearly one, releases in two waves.
+//
+// Raising it further means finding memory elsewhere, not adjusting this number.
+const uint32_t kMaxLiveDiscs = 34;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
