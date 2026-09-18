@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "Board.h"
+#include "Connect4Scene.h"
 
 // Connect Four for the GameCube.
 //
@@ -72,6 +73,8 @@ private:
     void OnDiscLanded(const C4::Move& move);
     void OnGameEnded(C4::Result result);
     void OnRerackStarted();
+
+    Connect4Scene mScene;
 
     C4::Board mBoard;
     State mState = State::Playing;

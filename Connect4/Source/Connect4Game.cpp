@@ -21,6 +21,10 @@ const float kStickDeadzone = 0.5f;
 // physics disc exists this becomes "when the rigid body sleeps" instead of a timer.
 const float kDropDuration = 0.55f;
 
+// Upper bound on a drop, used when the scene is driving the timing. If an animation somehow never
+// reports finishing, the turn still advances instead of the game sitting in Dropping for good.
+const float kDropTimeout = 3.0f;
+
 // A beat before the AI plays, so it does not answer instantly. Reads as thinking.
 const float kAIThinkTime = 0.45f;
 
@@ -61,6 +65,14 @@ bool Connect4Game::Initialize()
         return false;
     }
 
+    // The scene is optional on purpose. If the board models are missing or renamed, the rules and
+    // turn flow still run and still log, which is what makes a headless or half-dressed scene
+    // debuggable instead of a black screen.
+    if (!mScene.Initialize())
+    {
+        LogWarning("Connect4: scene not available; running rules only.");
+    }
+
     NewGame();
     OctLog("Connect4: initialized, rules self-test passed");
     return true;
@@ -77,6 +89,10 @@ void Connect4Game::NewGame()
     mDropTimer = 0.0f;
     mAIThinkTimer = 0.0f;
     mRepeatTimer = 0.0f;
+
+    mScene.ClearDiscs();
+    mScene.SetCursorColumn(mCursorCol);
+    mScene.ShowCursorDisc(mTurn);
 
     OnCursorMoved(mCursorCol);
 }
@@ -98,6 +114,10 @@ void Connect4Game::Update(float deltaTime)
     case State::GameOver:  UpdateGameOver(deltaTime);  break;
     case State::Reracking: UpdateRerack(deltaTime);    break;
     }
+
+    // After the state update, so a disc released this frame starts moving on the same frame rather
+    // than a frame late.
+    mScene.Update(deltaTime);
 }
 
 bool Connect4Game::IsAITurn() const
@@ -208,8 +228,19 @@ bool Connect4Game::TryDrop(int col)
 void Connect4Game::UpdateDropping(float deltaTime)
 {
     mDropTimer += deltaTime;
-    if (mDropTimer < kDropDuration)
+
+    // Wait for the disc to actually land when there is one to watch, so the turn changes exactly
+    // when the board looks settled. The timer is the fallback for a scene that never loaded, and
+    // doubles as a backstop so a missed animation cannot wedge the game in Dropping forever.
+    if (mScene.IsReady())
+    {
+        if (mScene.IsDropAnimating() && mDropTimer < kDropTimeout)
+            return;
+    }
+    else if (mDropTimer < kDropDuration)
+    {
         return;
+    }
 
     OnDiscLanded(mPendingMove);
 
@@ -230,6 +261,10 @@ void Connect4Game::UpdateDropping(float deltaTime)
     // Keep the cursor on a column that can still take a disc.
     if (!mBoard.CanDrop(mCursorCol))
         MoveCursor(1);
+
+    // The next player's disc appears above the board, ready to be moved and dropped.
+    mScene.SetCursorColumn(mCursorCol);
+    mScene.ShowCursorDisc(mTurn);
 }
 
 void Connect4Game::UpdateGameOver(float deltaTime)
@@ -255,12 +290,21 @@ void Connect4Game::UpdateRerack(float deltaTime)
 {
     (void)deltaTime;
 
-    // Placeholder timing. Once the discs are rigid bodies this waits for them to leave the
-    // play area or fall asleep, rather than counting seconds.
     const float kRerackDuration = 2.0f;
 
-    if (mStateTime >= kRerackDuration)
-        NewGame();
+    // Wait for the discs to finish falling out when the scene is driving it; the timer covers the
+    // rules-only case and stops a stuck animation from holding the game here.
+    if (mScene.IsReady())
+    {
+        if (mScene.IsRerackAnimating() && mStateTime < kRerackDuration * 2.0f)
+            return;
+    }
+    else if (mStateTime < kRerackDuration)
+    {
+        return;
+    }
+
+    NewGame();
 }
 
 // ---------------------------------------------------------------------------
@@ -272,30 +316,42 @@ void Connect4Game::UpdateRerack(float deltaTime)
 
 void Connect4Game::OnCursorMoved(int col)
 {
-    (void)col;
-    // slide the held disc above the chosen column; tick sound
+    // Slide the waiting disc to the entry point above the chosen column.
+    mScene.SetCursorColumn(col);
+
+    // TODO: tick sound
 }
 
 void Connect4Game::OnDiscDropped(const C4::Move& move)
 {
-    (void)move;
-    // release the disc: spawn the rigid body at the column mouth and let Bullet take it.
-    // move.mCol and move.mRow are already decided, so the physics only has to look right.
+    // The move is already decided by the rules, so the fall only has to look right: it starts at
+    // the column's entry point and ends on that cell's still point.
+    mScene.BeginDrop(move, mTurn);
+
+    // TODO: release sound
 }
 
 void Connect4Game::OnDiscLanded(const C4::Move& move)
 {
     (void)move;
-    // clack; settle the disc into its exact slot so the stack stays tidy over a long game
+
+    // The disc is snapped onto its still point by the scene as the animation ends, so the stack
+    // cannot drift over a long game.
+
+    // TODO: clack sound
 }
 
 void Connect4Game::OnGameEnded(C4::Result result)
 {
-    (void)result;
-    // highlight the four winning discs -- Board::GetWinningLine() has them
+    if (result == C4::Result::Draw)
+    {
+        return;
+    }
+
+    mScene.HighlightWin(mBoard.GetWinningLine());
 }
 
 void Connect4Game::OnRerackStarted()
 {
-    // drop the floor away and wake every disc: the whole point of having Bullet in here
+    mScene.BeginRerack();
 }
