@@ -1137,6 +1137,19 @@ void Connect4Scene::BeginRerack()
             {
                 mSpillAxis = glm::vec3(0.0f);
             }
+
+            // Across the table: square to the spill and level, so most of the scatter runs along
+            // the width of the table, where there is room for it and nothing to clip against.
+            mSpreadAxis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), mSpillAxis);
+
+            if (glm::length(mSpreadAxis) > 0.0001f)
+            {
+                mSpreadAxis = glm::normalize(mSpreadAxis);
+            }
+            else
+            {
+                mSpreadAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+            }
         }
     }
 
@@ -1171,11 +1184,16 @@ void Connect4Scene::BeginRerack()
         disc.mCleared = false;
         disc.mFlatT = -1.0f;
 
-        // Fast enough to travel. The fall out of the board lasts under a second, so a drift of
-        // a fraction of a cell per second moved a disc less than its own radius and they landed
-        // in the same tidy grid they left.
-        disc.mFrom = mSpillAxis * (spacing * 3.5f)
-                   + glm::vec3(rx * spacing * 3.0f, 0.0f, rz * spacing * 3.0f);
+        // Spread mostly across the table rather than towards the player. Sending them at the
+        // camera walked the front row into the near clip plane, which cuts geometry on a flat
+        // plane square to the view and sliced the closest discs in half. There is also far more
+        // table to land on sideways than there is in front of the board.
+        //
+        // Fast enough to travel: the fall out of the board lasts under a second, so a drift of a
+        // fraction of a cell per second moves a disc less than its own radius.
+        disc.mFrom = mSpillAxis * (spacing * 0.8f)
+                   + mSpreadAxis * (rx * spacing * 4.5f)
+                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.6f);
 
         disc.mSpin = rs * 540.0f;
     }

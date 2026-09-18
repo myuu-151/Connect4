@@ -171,7 +171,8 @@ private:
 
     glm::vec3 mLiftAxis = glm::vec3(0.0f, 1.0f, 0.0f);   // the board's own up, in world
     glm::vec3 mTrayAxis = glm::vec3(1.0f, 0.0f, 0.0f);   // the way the tray travels, in world
-    glm::vec3 mSpillAxis = glm::vec3(0.0f);              // the way released discs spread, in world
+    glm::vec3 mSpillAxis = glm::vec3(0.0f);              // the way released discs drift, in world
+    glm::vec3 mSpreadAxis = glm::vec3(1.0f, 0.0f, 0.0f); // across the table, square to the spill
 
     float mLiftDistance = 0.0f;
     float mTrayDistance = 0.0f;
