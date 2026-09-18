@@ -18,18 +18,38 @@ namespace
 {
 
 // ---------------------------------------------------------------------------
-// Board layout, as fractions of the frame model's own bounding box.
+// Board layout: the measured centre of every hole in the frame model.
 //
-// Fractions rather than world coordinates so the board can be moved, rotated or rescaled in the
-// editor without touching code. These are the numbers to nudge if the discs do not sit dead centre
-// in their holes -- nothing else here needs to change.
+// These were not guessed. The frame mesh was analysed directly: the holes are through-bores in a
+// thin panel, so their walls are the surfaces whose normals lie in the plane of the board. Welding
+// the mesh by position (it is flat shaded, so no two triangles share a vertex index) and running
+// union-find over those walls separates each bore exactly, and their centroids are the numbers
+// below. The grid came out regular to within about 2 units in a 109-unit pitch, and every one of
+// the 42 cells was accounted for.
 //
-// The span values are the distance between the OUTERMOST hole centres, not the full playfield, so
-// kColSpanFrac = 0.84 means the centres of columns 0 and 6 sit 84% of the frame's width apart.
+// They are stored as fractions of the mesh's bounding box rather than absolute coordinates, so a
+// re-export of the same model at a different scale still lands correctly. Only remodelling the
+// board would invalidate them, and the mismatch would be obvious.
+//
+// Column 0 is at the model's -X end, row 0 at its -Y end (the bottom), matching Board.h.
 // ---------------------------------------------------------------------------
-const float kColSpanFrac = 0.84f;      // column 0 centre -> column 6 centre, over frame width
-const float kRowSpanFrac = 0.70f;      // row 0 centre -> row 5 centre, over frame height
-const float kGridCenterYFrac = 0.50f;  // where the grid's midpoint sits, 0 = frame bottom, 1 = top
+const float kColFrac[C4::kCols] =
+{
+    0.103791f, 0.239605f, 0.368578f, 0.497419f, 0.628205f, 0.758798f, 0.892981f
+};
+
+const float kRowFrac[C4::kRows] =
+{
+    0.093573f, 0.257181f, 0.421684f, 0.581253f, 0.742253f, 0.901033f
+};
+
+// Discs sit in the middle of the panel's thickness.
+const float kPlaneFrac = 0.5f;
+
+// Set this if pressing right moves the disc left on screen. The board is free to be rotated in the
+// editor, and a half turn mirrors the model's X against the screen; nothing else has to change,
+// since Connect Four is symmetric and only the cursor direction is affected.
+const bool kMirrorColumns = false;
 
 // How far above the top of the frame a waiting disc hovers, as a multiple of row spacing.
 const float kEntryHeightRows = 0.9f;
@@ -129,35 +149,26 @@ bool Connect4Layout::Build(StaticMesh3D* frameNode)
     // Work in the mesh's own local space, then transform. Doing it this way means the frame's
     // scale and rotation are applied by the same matrix the renderer uses, so the points cannot
     // drift out of step with what is drawn.
-    const float colSpanLocal = size.x * kColSpanFrac;
-    const float rowSpanLocal = size.y * kRowSpanFrac;
+    const float planeZ = localMin.z + size.z * kPlaneFrac;
 
-    const float colStepLocal = colSpanLocal / float(C4::kCols - 1);
-    const float rowStepLocal = rowSpanLocal / float(C4::kRows - 1);
-
-    const float centerX = (localMin.x + localMax.x) * 0.5f;
-    const float centerY = localMin.y + size.y * kGridCenterYFrac;
-    const float centerZ = (localMin.z + localMax.z) * 0.5f;
-
-    // Row 0 is the bottom of the board, matching Board.h, so the grid is built upwards from the
-    // lowest cell.
-    const float bottomY = centerY - rowSpanLocal * 0.5f;
-    const float leftX = centerX - colSpanLocal * 0.5f;
-
+    // Row spacing is needed for the entry height, and is taken from the measured rows rather than
+    // assumed, so it stays right even though the rows are not perfectly evenly spaced.
+    const float rowStepLocal = (kRowFrac[C4::kRows - 1] - kRowFrac[0]) * size.y / float(C4::kRows - 1);
     const float entryYLocal = localMax.y + rowStepLocal * kEntryHeightRows;
 
     const glm::mat4& toWorld = frameNode->GetTransform();
 
     for (int col = 0; col < C4::kCols; ++col)
     {
-        const float x = leftX + colStepLocal * float(col);
+        const int srcCol = kMirrorColumns ? (C4::kCols - 1 - col) : col;
+        const float x = localMin.x + size.x * kColFrac[srcCol];
 
-        mEntry[col] = glm::vec3(toWorld * glm::vec4(x, entryYLocal, centerZ, 1.0f));
+        mEntry[col] = glm::vec3(toWorld * glm::vec4(x, entryYLocal, planeZ, 1.0f));
 
         for (int row = 0; row < C4::kRows; ++row)
         {
-            const float y = bottomY + rowStepLocal * float(row);
-            mStill[col][row] = glm::vec3(toWorld * glm::vec4(x, y, centerZ, 1.0f));
+            const float y = localMin.y + size.y * kRowFrac[row];
+            mStill[col][row] = glm::vec3(toWorld * glm::vec4(x, y, planeZ, 1.0f));
         }
     }
 
@@ -242,9 +253,21 @@ bool Connect4Scene::Initialize()
         return false;
     }
 
-    // Yellow is the red material tinted, rather than a second asset to keep in sync. MaterialLite
-    // multiplies its colour over the texture, so the chip keeps its moulding and wear.
-    if (mRedMaterial != nullptr)
+    // Prefer a real yellow chip if one has been put in the scene, so its own texture is used
+    // rather than an approximation of it.
+    StaticMesh3D* yellowChip = root->FindChild<StaticMesh3D>("Chip_Yellow", true);
+
+    if (yellowChip != nullptr)
+    {
+        mYellowMaterial = yellowChip->GetMaterial();
+
+        // It is only there to be sampled; the pool draws the actual discs.
+        yellowChip->SetVisible(false);
+    }
+
+    // Otherwise tint the red material. MaterialLite multiplies its colour over the texture, so the
+    // chip keeps its moulding and wear instead of turning into a flat yellow disc.
+    if (mYellowMaterial == nullptr && mRedMaterial != nullptr)
     {
         MaterialLite* yellow = MaterialLite::New(mRedMaterial);
 
