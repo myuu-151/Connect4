@@ -31,7 +31,13 @@ public:
 
     // Measures the frame mesh and fills in both sets of points. Returns false if the frame node
     // has no mesh to measure.
-    bool Build(StaticMesh3D* frameNode);
+    //
+    // depthSample, when given, sets how deep in the slot the discs sit: whatever depth that node
+    // has been placed at is the depth they are given. Nudging the chip in the editor until it looks
+    // right in the slot is a far better way to set that than a number in a header, and it is the
+    // one part of the layout the mesh itself cannot answer -- the hole tells you where a disc goes
+    // across the board, not how far into it. Falls back to the middle of the panel.
+    bool Build(StaticMesh3D* frameNode, Node3D* depthSample);
 
     bool IsBuilt() const { return mBuilt; }
 

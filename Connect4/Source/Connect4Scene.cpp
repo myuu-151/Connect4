@@ -124,7 +124,7 @@ bool MeasureMeshBounds(StaticMesh* mesh, glm::vec3& outMin, glm::vec3& outMax)
 // Connect4Layout
 // ---------------------------------------------------------------------------
 
-bool Connect4Layout::Build(StaticMesh3D* frameNode)
+bool Connect4Layout::Build(StaticMesh3D* frameNode, Node3D* depthSample)
 {
     mBuilt = false;
 
@@ -149,14 +149,26 @@ bool Connect4Layout::Build(StaticMesh3D* frameNode)
     // Work in the mesh's own local space, then transform. Doing it this way means the frame's
     // scale and rotation are applied by the same matrix the renderer uses, so the points cannot
     // drift out of step with what is drawn.
-    const float planeZ = localMin.z + size.z * kPlaneFrac;
+    const glm::mat4& toWorld = frameNode->GetTransform();
+
+    // Depth in the slot. The holes say where a disc sits across the face of the board but nothing
+    // about how far into it, so take that from the chip placed in the scene: whatever depth it has
+    // been nudged to is the depth every disc gets. Its position is otherwise unused -- the game
+    // drives it -- so the placement is free to mean this.
+    float planeZ = localMin.z + size.z * kPlaneFrac;
+
+    if (depthSample != nullptr)
+    {
+        const glm::vec3 sampleLocal =
+            glm::vec3(glm::inverse(toWorld) * glm::vec4(depthSample->GetWorldPosition(), 1.0f));
+
+        planeZ = sampleLocal.z;
+    }
 
     // Row spacing is needed for the entry height, and is taken from the measured rows rather than
     // assumed, so it stays right even though the rows are not perfectly evenly spaced.
     const float rowStepLocal = (kRowFrac[C4::kRows - 1] - kRowFrac[0]) * size.y / float(C4::kRows - 1);
     const float entryYLocal = localMax.y + rowStepLocal * kEntryHeightRows;
-
-    const glm::mat4& toWorld = frameNode->GetTransform();
 
     for (int col = 0; col < C4::kCols; ++col)
     {
@@ -232,13 +244,9 @@ bool Connect4Scene::Initialize()
         return false;
     }
 
-    if (!mLayout.Build(mFrameNode))
-    {
-        return false;
-    }
-
-    // The chip already placed in the scene is the template: it supplies both the mesh and the red
-    // material, so the disc pool matches whatever is in the editor without naming assets here.
+    // The chip already placed in the scene is the template: it supplies the mesh, the red material,
+    // the scale and rotation to spawn discs at, and -- through where it has been placed -- how deep
+    // in the slot they sit. So it has to be found before the layout is built.
     StaticMesh3D* templateChip = root->FindChild<StaticMesh3D>("Chip_Red", true);
 
     if (templateChip != nullptr)
@@ -250,6 +258,11 @@ bool Connect4Scene::Initialize()
     if (mDiscMesh == nullptr)
     {
         LogError("Connect4: could not find the Chip_Red mesh.");
+        return false;
+    }
+
+    if (!mLayout.Build(mFrameNode, templateChip))
+    {
         return false;
     }
 
