@@ -91,6 +91,11 @@ const float kPullDepthMul = 2.2f;
 
 // Gravity, bounce, friction and when a disc counts as stopped are Bullet's now, set per body in
 // StartDiscPhysics rather than hand-integrated here.
+//
+// How much of the world's gravity the discs feel. Below 1 because the board is only centimetres
+// across in world units: at full gravity a disc falls its own height in a few hundredths of a
+// second, which is correct and unwatchable.
+const float kDiscGravityScale = 0.30f;
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
@@ -1025,6 +1030,7 @@ void Connect4Scene::BuildPhysicsColliders()
 void Connect4Scene::StartDiscPhysics()
 {
     const float spacing = mLayout.GetRowSpacing();
+    World* world = GetWorld(0);
 
     uint32_t seed = 0x51ED2701u;
 
@@ -1053,11 +1059,11 @@ void Connect4Scene::StartDiscPhysics()
         disc.mNode->SetCollisionShape(shape);
 
         disc.mNode->SetMass(0.05f);
-        disc.mNode->SetFriction(0.55f);
-        disc.mNode->SetRollingFriction(0.02f);   // or they roll on their edges forever
-        disc.mNode->SetRestitution(0.18f);
-        disc.mNode->SetLinearDamping(0.05f);
-        disc.mNode->SetAngularDamping(0.12f);
+        disc.mNode->SetFriction(0.35f);
+        disc.mNode->SetRollingFriction(0.008f);  // some, or they roll on their edges forever
+        disc.mNode->SetRestitution(0.45f);       // light plastic clatters rather than thuds
+        disc.mNode->SetLinearDamping(0.0f);
+        disc.mNode->SetAngularDamping(0.03f);
 
         disc.mNode->EnableCollision(true);
         disc.mNode->EnablePhysics(true);
@@ -1065,6 +1071,23 @@ void Connect4Scene::StartDiscPhysics()
         // Start the body where the node already is, rather than wherever it was when the body was
         // last created.
         disc.mNode->FullSyncRigidBodyTransform();
+
+        // Less gravity than the world's.
+        //
+        // The world's is correct for a world measured in metres, and the discs were obeying it
+        // exactly -- which is the problem. The board is only centimetres across in world units, so
+        // a disc falls its own height in a few hundredths of a second and the whole rerack is over
+        // before the eye can follow it. It reads as something dense being dropped rather than a
+        // plastic counter tipping out of a rack.
+        //
+        // Slowing gravity for these bodies alone keeps the arcs and the tumbling and just gives
+        // them time to be seen. Nothing else in the scene is simulated, so there is nothing for
+        // this to be inconsistent with.
+        if (world != nullptr && world->GetDynamicsWorld() != nullptr && disc.mNode->GetRigidBody() != nullptr)
+        {
+            const btVector3 worldGravity = world->GetDynamicsWorld()->getGravity();
+            disc.mNode->GetRigidBody()->setGravity(worldGravity * kDiscGravityScale);
+        }
 
         // The spread it was given when the tray was pulled, and a turn to go with it.
         seed = seed * 1664525u + 1013904223u;
@@ -1343,9 +1366,11 @@ void Connect4Scene::BeginRerack()
         //
         // Fast enough to travel: the fall out of the board lasts under a second, so a drift of a
         // fraction of a cell per second moves a disc less than its own radius.
-        disc.mFrom = mSpillAxis * (spacing * 0.8f)
-                   + mSpreadAxis * (rx * spacing * 4.5f)
-                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.6f);
+        // Less push than the hand-written version needed: with gravity eased off they are in the
+        // air for longer, so the same speed carries them a good deal further.
+        disc.mFrom = mSpillAxis * (spacing * 0.5f)
+                   + mSpreadAxis * (rx * spacing * 2.2f)
+                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.4f);
 
     }
 }
