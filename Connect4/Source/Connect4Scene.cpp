@@ -939,6 +939,42 @@ void Connect4Scene::UpdateRerack(float deltaTime)
             StartDiscPhysics();
         }
 
+        // Damp anything turning without going anywhere.
+        //
+        // A disc balanced on its edge can spin like a coin indefinitely: Bullet will happily hold
+        // it there, and friction about the contact does little because the contact is a point.
+        // Real ones fall over.
+        //
+        // The test is deliberately on linear speed, not angular. A disc rolling away on its edge
+        // is also spinning fast, and that is the best thing the simulation does -- but it is
+        // travelling while it does it. One that is turning while staying put is the one stuck, and
+        // damping only those leaves the rolling alone.
+        {
+            const float spacing = mLayout.GetRowSpacing();
+            const float goingNowhere = spacing * 0.35f;
+            const float turningFast = 1.5f;
+
+            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+            {
+                Disc& disc = mDiscs[i];
+
+                if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
+                {
+                    continue;
+                }
+
+                const glm::vec3 linear = disc.mNode->GetLinearVelocity();
+                const glm::vec3 angular = disc.mNode->GetAngularVelocity();
+
+                if (glm::length(linear) < goingNowhere && glm::length(angular) > turningFast)
+                {
+                    // Bleed it off over about a second rather than stopping it dead, so it winds
+                    // down and topples instead of freezing mid-spin.
+                    disc.mNode->SetAngularVelocity(angular * glm::max(0.0f, 1.0f - deltaTime * 3.0f));
+                }
+            }
+        }
+
         // The clatter plays on the first disc to reach the table, not when they are let go. They
         // are released at the top of the board and fall for the best part of a second, so playing
         // it on release put the sound well ahead of anything hitting anything.
