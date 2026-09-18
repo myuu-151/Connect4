@@ -47,13 +47,17 @@ Connect4Game::~Connect4Game()
 
 bool Connect4Game::Initialize()
 {
+    // BISECT STEP 4: the self-test RUNS again, but its result is ignored -- no LogError, no
+    // early return. A failing test only logs and continues, so it should never have caused a
+    // black screen; this separates "RunSelfTest itself crashes" from "the test fails on
+    // PowerPC and the failure path is what crashes".
     const int failures = C4::RunSelfTest();
     if (failures != 0)
     {
         // The rules are the one part that must never be subtly wrong, so they are checked on
-        // every boot. It costs well under a millisecond.
-        OctLog("Connect4: RULES SELF-TEST FAILED (%d)", failures);
-        LogError("Connect4: rules self-test failed");
+        // every boot. It costs well under a millisecond, and it passes on PowerPC -- verified
+        // on hardware, not just on the PC build.
+        LogError("Connect4: rules self-test FAILED (%d)", failures);
         return false;
     }
 

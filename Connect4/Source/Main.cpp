@@ -54,7 +54,10 @@ void OctPostInitialize()
     // LogX. Hiding the widget stops it being drawn and nothing else.
     if (Renderer::Get() != nullptr)
     {
-        Renderer::Get()->EnableConsole(false);
+        // Left visible during bring-up. SYS_Log is a no-op on GameCube and OctLog's IsoLog
+        // is compiled out, so this console is the ONLY way the game can report anything on
+        // hardware. Turn it off once the game is drawing something of its own.
+        Renderer::Get()->EnableConsole(true);
     }
 
     // Full resolution. This is a board game: a handful of discs and a static camera, so it is
