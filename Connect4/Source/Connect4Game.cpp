@@ -292,11 +292,17 @@ void Connect4Game::UpdateRerack(float deltaTime)
 
     const float kRerackDuration = 2.0f;
 
+    // The scene's rerack is a sequence -- the grid lifts, the tray is pulled, the discs fall and
+    // are left lying on the table for a moment -- so it runs well past the rules-only timer. This
+    // backstop is only there to stop a stuck animation holding the game here forever, and has to
+    // sit above the longest that sequence can legitimately take.
+    const float kRerackTimeout = 9.0f;
+
     // Wait for the discs to finish falling out when the scene is driving it; the timer covers the
     // rules-only case and stops a stuck animation from holding the game here.
     if (mScene.IsReady())
     {
-        if (mScene.IsRerackAnimating() && mStateTime < kRerackDuration * 2.0f)
+        if (mScene.IsRerackAnimating() && mStateTime < kRerackTimeout)
             return;
     }
     else if (mStateTime < kRerackDuration)

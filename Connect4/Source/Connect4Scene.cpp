@@ -69,8 +69,24 @@ const float kBounceTime = 0.16f;
 // long enough not to teleport.
 const float kCursorSlideTime = 0.09f;
 
-const float kRerackDuration = 2.4f;
-const float kRerackGravity = 18.0f;    // row-spacings per second squared
+// --- rerack ----------------------------------------------------------------
+// The grid lifts out of its stand, the release tray is pulled, and the discs drop onto the table.
+const float kLiftTime = 0.70f;
+const float kPullTime = 0.45f;
+const float kSettleTime = 1.10f;       // how long they are left lying on the table
+
+// How far the grid rises, as a fraction of the frame's own height: far enough that the bottom row
+// clears the stand and the discs have somewhere to fall.
+const float kLiftFrac = 0.42f;
+
+// How far the tray slides out, as a fraction of its own length. Just short of all the way, so it
+// still reads as part of the board rather than a piece that came off.
+const float kPullFrac = 0.85f;
+
+const float kRerackGravity = 20.0f;    // row-spacings per second squared
+const float kDiscRestitution = 0.32f;  // how much of the fall is given back as a bounce
+const float kDiscFriction = 0.78f;     // horizontal speed kept per bounce
+const float kDiscRestSpeed = 0.35f;    // below this, in row-spacings per second, a disc has stopped
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
@@ -253,6 +269,11 @@ bool Connect4Scene::Initialize()
     {
         mDiscMesh = templateChip->GetStaticMesh();
         mRedMaterial = templateChip->GetMaterial();
+
+        // Captured here rather than further down because the rerack needs the scale to work out how
+        // thick a disc is, and that is computed before the pool is built.
+        mDiscScale = templateChip->GetScale();
+        mDiscRotation = templateChip->GetRotationEuler();
     }
 
     if (mDiscMesh == nullptr)
@@ -265,6 +286,107 @@ bool Connect4Scene::Initialize()
     {
         return false;
     }
+
+    // The stand and the release tray, which the rerack moves. Both are optional: without them the
+    // discs still fall, there is just less of a gesture to it.
+    mStandNode = root->FindChild<Node3D>("Stand", true);
+    mTrayNode = root->FindChild<Node3D>("ReleaseTray", true);
+
+    mFrameHome = mFrameNode->GetPosition();
+
+    if (mTrayNode != nullptr)
+    {
+        mTrayHome = mTrayNode->GetPosition();
+    }
+
+    // Directions are taken from the models rather than assumed to be world axes, so the board can
+    // be stood anywhere and rotated any way and the grid still rises along its own up, with the
+    // tray sliding along its own length.
+    {
+        const glm::mat4& frameToWorld = mFrameNode->GetTransform();
+        mLiftAxis = glm::normalize(glm::vec3(frameToWorld * glm::vec4(0, 1, 0, 0)));
+
+        glm::vec3 frameMin(0.0f);
+        glm::vec3 frameMax(0.0f);
+
+        if (MeasureMeshBounds(mFrameNode->GetStaticMesh(), frameMin, frameMax))
+        {
+            // Convert the height to world units by measuring it through the transform, so the
+            // frame's scale is accounted for without having to read it out separately.
+            const glm::vec3 bottom = glm::vec3(frameToWorld * glm::vec4(frameMin.x, frameMin.y, frameMin.z, 1.0f));
+            const glm::vec3 top = glm::vec3(frameToWorld * glm::vec4(frameMin.x, frameMax.y, frameMin.z, 1.0f));
+
+            mLiftDistance = glm::length(top - bottom) * kLiftFrac;
+        }
+    }
+
+    if (mTrayNode != nullptr)
+    {
+        StaticMesh3D* trayMesh = mTrayNode->As<StaticMesh3D>();
+        const glm::mat4& trayToWorld = mTrayNode->GetTransform();
+
+        mTrayAxis = glm::normalize(glm::vec3(trayToWorld * glm::vec4(1, 0, 0, 0)));
+
+        glm::vec3 trayMin(0.0f);
+        glm::vec3 trayMax(0.0f);
+
+        if (trayMesh != nullptr && MeasureMeshBounds(trayMesh->GetStaticMesh(), trayMin, trayMax))
+        {
+            const glm::vec3 a = glm::vec3(trayToWorld * glm::vec4(trayMin.x, trayMin.y, trayMin.z, 1.0f));
+            const glm::vec3 b = glm::vec3(trayToWorld * glm::vec4(trayMax.x, trayMin.y, trayMin.z, 1.0f));
+
+            mTrayDistance = glm::length(b - a) * kPullFrac;
+        }
+    }
+
+    // The table top is the underside of the stand -- it is what the board is standing on, so it is
+    // exactly the height a disc should come to rest at.
+    mTableY = mLayout.GetStillPoint(0, 0).y;
+
+    if (mStandNode != nullptr)
+    {
+        StaticMesh3D* standMesh = mStandNode->As<StaticMesh3D>();
+
+        glm::vec3 standMin(0.0f);
+        glm::vec3 standMax(0.0f);
+
+        if (standMesh != nullptr && MeasureMeshBounds(standMesh->GetStaticMesh(), standMin, standMax))
+        {
+            const glm::mat4& standToWorld = mStandNode->GetTransform();
+
+            // Take the lowest corner of the box in world space; which local corner that is depends
+            // on how the stand has been rotated, so test them all rather than guess.
+            float lowest = 1e9f;
+
+            for (int c = 0; c < 8; ++c)
+            {
+                const glm::vec3 corner(
+                    (c & 1) ? standMax.x : standMin.x,
+                    (c & 2) ? standMax.y : standMin.y,
+                    (c & 4) ? standMax.z : standMin.z);
+
+                lowest = glm::min(lowest, glm::vec3(standToWorld * glm::vec4(corner, 1.0f)).y);
+            }
+
+            mTableY = lowest;
+        }
+    }
+
+    // A disc resting on the table sits half its thickness above it. The thickness is the smallest
+    // of the chip's dimensions, whichever axis the model happens to use for it.
+    {
+        glm::vec3 discMin(0.0f);
+        glm::vec3 discMax(0.0f);
+
+        if (MeasureMeshBounds(mDiscMesh, discMin, discMax))
+        {
+            const glm::vec3 discSize = (discMax - discMin) * glm::abs(mDiscScale);
+            mDiscRestOffset = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
+        }
+    }
+
+    OctLog("Connect4: lift %.3f, tray pull %.3f, table y %.3f",
+           mLiftDistance, mTrayDistance, mTableY);
 
     // Prefer a real yellow chip if one has been put in the scene, so its own texture is used
     // rather than an approximation of it.
@@ -306,8 +428,6 @@ bool Connect4Scene::Initialize()
     if (templateChip != nullptr)
     {
         mDiscParent = templateChip->GetParent() ? templateChip->GetParent()->As<Node3D>() : nullptr;
-        mDiscScale = templateChip->GetScale();
-        mDiscRotation = templateChip->GetRotationEuler();
     }
 
     if (mDiscParent == nullptr)
@@ -575,12 +695,85 @@ void Connect4Scene::Update(float deltaTime)
         }
     }
 
-    // --- rerack -------------------------------------------------------------
-    if (mRerackActive)
-    {
-        mRerackTime += deltaTime;
+    UpdateRerack(deltaTime);
+}
 
-        const float gravity = kRerackGravity * mLayout.GetRowSpacing();
+void Connect4Scene::UpdateRerack(float deltaTime)
+{
+    if (mRerackPhase == RerackPhase::Idle)
+    {
+        return;
+    }
+
+    mRerackTime += deltaTime;
+
+    switch (mRerackPhase)
+    {
+    case RerackPhase::Lift:
+    {
+        // The grid rises out of its stand, carrying the discs with it -- they are still sitting in
+        // their slots at this point, held up by the tray underneath.
+        const float t = EaseInOut(mRerackTime / kLiftTime);
+        const glm::vec3 offset = mLiftAxis * (mLiftDistance * t);
+
+        mFrameNode->SetPosition(mFrameHome + offset);
+
+        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        {
+            Disc& disc = mDiscs[i];
+
+            if (disc.mInUse && disc.mNode != nullptr)
+            {
+                disc.mNode->SetWorldPosition(disc.mTo + offset);
+            }
+        }
+
+        if (mRerackTime >= kLiftTime)
+        {
+            // Remember where each disc ended up, so the fall starts from where it is rather than
+            // from where it originally landed.
+            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+            {
+                if (mDiscs[i].mInUse)
+                {
+                    mDiscs[i].mTo += offset;
+                }
+            }
+
+            mRerackPhase = RerackPhase::PullTray;
+            mRerackTime = 0.0f;
+        }
+
+        break;
+    }
+
+    case RerackPhase::PullTray:
+    {
+        // The release slides out from under the discs. Nothing falls yet: the pull is the moment,
+        // and it reads better if the discs wait for it to finish.
+        if (mTrayNode != nullptr)
+        {
+            const float t = EaseInOut(mRerackTime / kPullTime);
+            mTrayNode->SetPosition(mTrayHome + mTrayAxis * (mTrayDistance * t));
+        }
+
+        if (mRerackTime >= kPullTime)
+        {
+            mRerackPhase = RerackPhase::Fall;
+            mRerackTime = 0.0f;
+        }
+
+        break;
+    }
+
+    case RerackPhase::Fall:
+    {
+        const float spacing = mLayout.GetRowSpacing();
+        const float gravity = kRerackGravity * spacing;
+        const float restY = mTableY + mDiscRestOffset;
+        const float restSpeed = kDiscRestSpeed * spacing;
+
+        bool anyMoving = false;
 
         for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
         {
@@ -591,21 +784,84 @@ void Connect4Scene::Update(float deltaTime)
                 continue;
             }
 
-            disc.mVelocity.y -= gravity * deltaTime;
-
             glm::vec3 pos = disc.mNode->GetWorldPosition();
-            pos += disc.mVelocity * deltaTime;
-            disc.mNode->SetWorldPosition(pos);
 
+            // Already settled: leave it exactly where it stopped rather than letting it creep.
+            if (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed)
+            {
+                continue;
+            }
+
+            anyMoving = true;
+
+            disc.mVelocity.y -= gravity * deltaTime;
+            pos += disc.mVelocity * deltaTime;
+
+            if (pos.y < restY)
+            {
+                pos.y = restY;
+
+                // Bounce, giving back a fraction of the impact and scrubbing off horizontal speed
+                // as it skids. Discs land flat and do not bounce much, so the numbers are low.
+                disc.mVelocity.y = -disc.mVelocity.y * kDiscRestitution;
+                disc.mVelocity.x *= kDiscFriction;
+                disc.mVelocity.z *= kDiscFriction;
+                disc.mSpin *= kDiscFriction;
+
+                if (glm::abs(disc.mVelocity.y) < restSpeed)
+                {
+                    disc.mVelocity = glm::vec3(0.0f);
+                    disc.mSpin = 0.0f;
+                }
+            }
+
+            disc.mNode->SetWorldPosition(pos);
             disc.mNode->SetRotation(disc.mNode->GetRotationEuler() +
                                     glm::vec3(0.0f, 0.0f, disc.mSpin * deltaTime));
         }
 
-        if (mRerackTime >= kRerackDuration)
+        // Move on once they have stopped, rather than after a fixed time, so the board is never
+        // reset out from under a disc still rolling. The time limit is only a backstop.
+        if (!anyMoving || mRerackTime > 4.0f)
         {
-            ClearDiscs();
-            mRerackActive = false;
+            mRerackPhase = RerackPhase::Settle;
+            mRerackTime = 0.0f;
         }
+
+        break;
+    }
+
+    case RerackPhase::Settle:
+    {
+        // A beat with the discs lying on the table before the board goes back together.
+        if (mRerackTime >= kSettleTime)
+        {
+            ResetBoardParts();
+            ClearDiscs();
+            mRerackPhase = RerackPhase::Idle;
+        }
+
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+void Connect4Scene::ResetBoardParts()
+{
+    // Exactly the positions they started at, not an approximation of them: the layout was measured
+    // through the frame's transform, so letting the frame come back a fraction low would put every
+    // still point out by the same amount for the next game.
+    if (mFrameNode != nullptr)
+    {
+        mFrameNode->SetPosition(mFrameHome);
+    }
+
+    if (mTrayNode != nullptr)
+    {
+        mTrayNode->SetPosition(mTrayHome);
     }
 }
 
@@ -646,7 +902,7 @@ void Connect4Scene::BeginRerack()
     // Stop pulsing the winning line: from here every disc is falling out together.
     mNumWinDiscs = 0;
 
-    mRerackActive = true;
+    mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
 
     HideCursorDisc();
@@ -673,9 +929,11 @@ void Connect4Scene::BeginRerack()
 
         const float spacing = mLayout.GetRowSpacing();
 
-        disc.mVelocity = glm::vec3(rx * spacing * 1.2f,
-                                   -0.2f * spacing,
-                                   rz * spacing * 0.8f);
+        // Sideways drift only. They start held in their slots and are let go when the tray is
+        // pulled, so gravity supplies the downward speed rather than the disc being thrown.
+        disc.mVelocity = glm::vec3(rx * spacing * 0.9f,
+                                   0.0f,
+                                   rz * spacing * 0.6f);
         disc.mSpin = rs * 540.0f;
     }
 }

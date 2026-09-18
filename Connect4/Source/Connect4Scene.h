@@ -87,15 +87,30 @@ public:
     // --- whole board --------------------------------------------------------
     void HighlightWin(const C4::Move* winLine);
     void BeginRerack();
-    bool IsRerackAnimating() const { return mRerackActive; }
+    bool IsRerackAnimating() const { return mRerackPhase != RerackPhase::Idle; }
     void ClearDiscs();
 
     const Connect4Layout& GetLayout() const { return mLayout; }
 
 private:
 
+    // Emptying the board is the real Connect Four gesture, which is why the frame, the stand and
+    // the release tray are separate models: the grid lifts out of its stand, the tray is pulled,
+    // and the discs drop through onto the table.
+    enum class RerackPhase : uint8_t
+    {
+        Idle,
+        Lift,       // the grid rises out of the stand, discs still held in their slots
+        PullTray,   // the release slides out from under them
+        Fall,       // they drop onto the table and scatter
+        Settle,     // resting, before the board is set up again
+    };
+
     StaticMesh3D* CreateDisc(const char* name);
     Material* GetDiscMaterial(C4::Cell who);
+
+    void UpdateRerack(float deltaTime);
+    void ResetBoardParts();
 
     Connect4Layout mLayout;
 
@@ -137,7 +152,25 @@ private:
     float mDropDuration = 0.0f;
     bool mDropActive = false;
 
-    bool mRerackActive = false;
+    // The other two pieces of the board, moved during a rerack and put back afterwards.
+    Node3D* mStandNode = nullptr;
+    Node3D* mTrayNode = nullptr;
+
+    glm::vec3 mFrameHome = glm::vec3(0.0f);
+    glm::vec3 mTrayHome = glm::vec3(0.0f);
+
+    glm::vec3 mLiftAxis = glm::vec3(0.0f, 1.0f, 0.0f);   // the board's own up, in world
+    glm::vec3 mTrayAxis = glm::vec3(1.0f, 0.0f, 0.0f);   // the tray's long axis, in world
+
+    float mLiftDistance = 0.0f;
+    float mTrayDistance = 0.0f;
+
+    // Where a disc comes to rest once it has fallen out: the top of the table, which is the
+    // bottom of the stand.
+    float mTableY = 0.0f;
+    float mDiscRestOffset = 0.0f;
+
+    RerackPhase mRerackPhase = RerackPhase::Idle;
     float mRerackTime = 0.0f;
 
     // Winning discs, so they can be pulsed while the result is up.
