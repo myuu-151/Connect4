@@ -294,11 +294,15 @@ bool Connect4Scene::Initialize()
     mStandNode = root->FindChild<Node3D>("Stand", true);
     mTrayNode = root->FindChild<Node3D>("ReleaseTray", true);
 
-    mFrameHome = mFrameNode->GetPosition();
+    // World positions, not local ones. The lift and pull distances are measured in world units, and
+    // these nodes sit under a heavily scaled parent -- the frame model is hundreds of units across
+    // and scaled right down -- so treating those distances as local offsets moves the board by a
+    // hundredth of what was asked for, which looks like it not moving at all.
+    mFrameHome = mFrameNode->GetWorldPosition();
 
     if (mTrayNode != nullptr)
     {
-        mTrayHome = mTrayNode->GetPosition();
+        mTrayHome = mTrayNode->GetWorldPosition();
     }
 
     // Directions are taken from the models rather than assumed to be world axes, so the board can
@@ -720,7 +724,7 @@ void Connect4Scene::UpdateRerack(float deltaTime)
         const float t = EaseInOut(mRerackTime / kLiftTime);
         const glm::vec3 offset = mLiftAxis * (mLiftDistance * t);
 
-        mFrameNode->SetPosition(mFrameHome + offset);
+        mFrameNode->SetWorldPosition(mFrameHome + offset);
 
         for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
         {
@@ -758,7 +762,7 @@ void Connect4Scene::UpdateRerack(float deltaTime)
         if (mTrayNode != nullptr)
         {
             const float t = EaseInOut(mRerackTime / kPullTime);
-            mTrayNode->SetPosition(mTrayHome + mTrayAxis * (mTrayDistance * t));
+            mTrayNode->SetWorldPosition(mTrayHome + mTrayAxis * (mTrayDistance * t));
         }
 
         if (mRerackTime >= kPullTime)
@@ -860,12 +864,12 @@ void Connect4Scene::ResetBoardParts()
     // still point out by the same amount for the next game.
     if (mFrameNode != nullptr)
     {
-        mFrameNode->SetPosition(mFrameHome);
+        mFrameNode->SetWorldPosition(mFrameHome);
     }
 
     if (mTrayNode != nullptr)
     {
-        mTrayNode->SetPosition(mTrayHome);
+        mTrayNode->SetWorldPosition(mTrayHome);
     }
 }
 
