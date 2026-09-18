@@ -162,6 +162,11 @@ private:
         glm::vec3 mVelocity = glm::vec3(0.0f);
 
         bool mInUse = false;
+
+        // Rerack: how long this disc has been going nowhere. Once that is long enough it is taken
+        // out of the simulation, which both ends anything it is still doing on the spot and stops
+        // it costing the solver anything.
+        float mSlowTime = 0.0f;
     };
 
     Disc mDiscs[C4::kCols * C4::kRows];
