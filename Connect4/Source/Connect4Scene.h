@@ -128,6 +128,10 @@ private:
     void UpdateDiscRetirement(float deltaTime);
     void UpdateDiscRelease();
 
+    // Makes Bullet reserve, while the game is still loading, the solver memory a full rerack will
+    // need. See the definition for why it has to be done this way.
+    void WarmUpSolver();
+
     Connect4Layout mLayout;
 
     StaticMesh3D* mFrameNode = nullptr;
@@ -235,6 +239,9 @@ private:
     Box3D* mFootColliders[2] = { nullptr, nullptr };
 
     bool mDiscPhysicsRunning = false;
+
+    // Counts down the frames of the startup warm-up. Zero once it is done.
+    int32_t mWarmUpFrames = 0;
     bool mRerackSoundPlayed = false;
 
     // The solver setting in force before the rerack, put back afterwards.

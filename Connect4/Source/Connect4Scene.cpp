@@ -117,8 +117,13 @@ const float kDiscMaxLiveTime = 8.0f;
 // practice the whole board goes at once and the queue never comes into it. Only a draw, or very
 // nearly one, releases in two waves.
 //
-// Raising it further means finding memory elsewhere, not adjusting this number.
-const uint32_t kMaxLiveDiscs = 34;
+// With the solver warmed up at startup this is the whole board, which is what a rerack should be.
+// It is kept as a limit rather than removed because it is the thing to lower if the warm-up ever
+// stops covering the case.
+const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
+
+// How many frames the startup warm-up runs for.
+const int32_t kWarmUpFrames = 12;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
@@ -681,6 +686,52 @@ bool Connect4Scene::Initialize()
     }
 
     mReady = true;
+
+    // Drop the whole set once, out of sight, so Bullet sizes its solver arrays now rather than
+    // during a rerack when there is no memory left to size them with.
+    {
+        const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
+                                glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
+
+        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        {
+            Disc& disc = mDiscs[i];
+
+            if (disc.mNode == nullptr)
+            {
+                continue;
+            }
+
+            // Stacked in a column so they land on each other and form one island, which is the
+            // only arrangement that makes the solver reserve anything.
+            disc.mInUse = true;
+            disc.mFrom = glm::vec3(0.0f);
+            disc.mNode->SetWorldPosition(above + glm::vec3(0.0f, mDiscRadius * 2.2f * float(i), 0.0f));
+            disc.mNode->SetVisible(false);
+        }
+
+        StartDiscPhysics();
+
+        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        {
+            if (mDiscs[i].mAwaitingRelease)
+            {
+                ReleaseDisc(mDiscs[i], i);
+            }
+        }
+
+        // Stay invisible through all of it.
+        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        {
+            if (mDiscs[i].mNode != nullptr)
+            {
+                mDiscs[i].mNode->SetVisible(false);
+            }
+        }
+
+        mWarmUpFrames = kWarmUpFrames;
+    }
+
     OctLog("Connect4: scene ready");
     return true;
 }
@@ -911,6 +962,14 @@ void Connect4Scene::Update(float deltaTime)
     // Outside the rerack's phases on purpose. The discs are left simulating once it has nominally
     // finished so the result can be watched for as long as anyone likes, which means stragglers
     // still have to be retired and laid down after the phases are over.
+    // Before anything else: while this is running the discs are not the game's, they are a heap
+    // being dropped to make Bullet allocate.
+    if (mWarmUpFrames > 0)
+    {
+        WarmUpSolver();
+        return;
+    }
+
     UpdateDiscRelease();
     UpdateDiscRetirement(deltaTime);
     UpdateToppling(deltaTime);
@@ -1217,6 +1276,60 @@ void Connect4Scene::StartDiscPhysics()
 //
 // Lowest first, so the board empties from the bottom the way a real one does, and so the discs
 // already on the table are the ones supporting whatever comes down next.
+// Make Bullet reserve the solver memory a full rerack needs, while the game is still loading.
+//
+// A rerack used to crash: the solver allocates its arrays from the number of bodies in an island,
+// a heap of discs settling together is one island, and somewhere around thirty-nine of them the
+// allocation failed -- silently, by writing through a null pointer. The machine is at its memory
+// ceiling by the time a game is running, and worse, the heap is fragmented by everything the scene
+// loaded, so a single large contiguous request can fail with plenty of total memory free.
+//
+// The arrays grow and are never shrunk, so if they are grown once while memory is still clean the
+// capacity is there for the rest of the session and a rerack never has to allocate at all.
+//
+// It has to be a real pile. Islands are built from contact manifolds, so bodies that are not
+// touching produce no island and the solver reserves nothing -- warming up during the lift, while
+// the discs are still sitting apart in their slots, would have allocated nothing at all. So every
+// disc is genuinely dropped into a heap here, invisibly, and switched off again a few frames later.
+void Connect4Scene::WarmUpSolver()
+{
+    if (mWarmUpFrames <= 0)
+    {
+        return;
+    }
+
+    mWarmUpFrames--;
+
+    if (mWarmUpFrames > 0)
+    {
+        return;
+    }
+
+    // Done: put everything back as it was. The discs were never visible and the board has not
+    // started, so nothing here is observable except the memory that is now reserved.
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (disc.mNode != nullptr)
+        {
+            disc.mNode->EnablePhysics(false);
+            disc.mNode->EnableCollision(false);
+            disc.mNode->SetVisible(false);
+        }
+
+        disc.mInUse = false;
+        disc.mAwaitingRelease = false;
+        disc.mSlowTime = 0.0f;
+        disc.mLiveTime = 0.0f;
+        disc.mFlatT = -1.0f;
+    }
+
+    mDiscPhysicsRunning = false;
+
+    LogDebug("C4: solver warm-up done");
+}
+
 void Connect4Scene::UpdateDiscRelease()
 {
     if (!mDiscPhysicsRunning)
