@@ -1939,6 +1939,17 @@ void Connect4Scene::BeginRerack()
 
 void Connect4Scene::ClearDiscs()
 {
+    // Not while the warm-up is running.
+    //
+    // The game calls NewGame as soon as the scene is initialised, and NewGame clears the discs --
+    // which would switch off the heap that has just been dropped, before a single frame of it had
+    // been simulated. The warm-up would then run its frames with nothing in the world and reserve
+    // nothing, while reporting that it had finished.
+    if (mWarmUpFrames > 0)
+    {
+        return;
+    }
+
     // Nothing should still be simulated once the discs are back in the pool.
     StopDiscPhysics();
 

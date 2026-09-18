@@ -76,6 +76,10 @@ public:
 
     bool IsReady() const { return mReady; }
 
+    // True while the startup warm-up is running. The whole disc pool is in use during it, so the
+    // game must not try to take a disc from it.
+    bool IsWarmingUp() const { return mWarmUpFrames > 0; }
+
     void Update(float deltaTime);
 
     // --- cursor -------------------------------------------------------------

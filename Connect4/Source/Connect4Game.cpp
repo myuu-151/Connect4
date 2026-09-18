@@ -107,6 +107,17 @@ void Connect4Game::Update(float deltaTime)
         OctLog("Connect4: first frame");
     }
 
+    // Nothing until the scene has finished warming the physics up.
+    //
+    // Every disc in the pool is in use while that runs, so a move made during it found no disc to
+    // show: the board recorded it and nothing appeared, leaving an invisible counter in the slot
+    // and the two out of step for the rest of the game.
+    if (mScene.IsWarmingUp())
+    {
+        mScene.Update(deltaTime);
+        return;
+    }
+
     switch (mState)
     {
     case State::Playing:   UpdatePlaying(deltaTime);   break;
