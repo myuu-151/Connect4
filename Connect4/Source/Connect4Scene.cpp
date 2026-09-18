@@ -932,9 +932,26 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
             glm::vec3 pos = disc.mNode->GetWorldPosition();
 
-            // Already settled: leave it exactly where it stopped rather than letting it creep.
-            if (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed)
+            // Settled, and finished falling over: leave it exactly where it stopped rather than
+            // letting it creep. A disc still toppling has to be allowed through -- it has already
+            // stopped moving, so skipping it here left it set up to fall over and never advanced,
+            // which is why they stayed standing on their edges.
+            const bool settled = (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed);
+            const bool toppling = (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f);
+
+            if (settled && !toppling)
             {
+                continue;
+            }
+
+            if (settled)
+            {
+                // Only the topple is left to run.
+                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
+                disc.mNode->SetWorldRotation(
+                    glm::slerp(disc.mRotFrom, disc.mRotTo, EaseInOut(disc.mFlatT)));
+
+                anyMoving = true;
                 continue;
             }
 
@@ -1154,8 +1171,11 @@ void Connect4Scene::BeginRerack()
         disc.mCleared = false;
         disc.mFlatT = -1.0f;
 
-        disc.mFrom = mSpillAxis * (spacing * 0.9f)
-                   + glm::vec3(rx * spacing * 0.8f, 0.0f, rz * spacing * 0.8f);
+        // Fast enough to travel. The fall out of the board lasts under a second, so a drift of
+        // a fraction of a cell per second moved a disc less than its own radius and they landed
+        // in the same tidy grid they left.
+        disc.mFrom = mSpillAxis * (spacing * 3.5f)
+                   + glm::vec3(rx * spacing * 3.0f, 0.0f, rz * spacing * 3.0f);
 
         disc.mSpin = rs * 540.0f;
     }
