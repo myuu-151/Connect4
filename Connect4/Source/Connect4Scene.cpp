@@ -78,7 +78,7 @@ const float kSettleTime = 1.10f;       // how long they are left lying on the ta
 
 // How far the grid rises, as a fraction of the frame's own height: far enough that the bottom row
 // clears the stand and the discs have somewhere to fall.
-const float kLiftFrac = 0.42f;
+const float kLiftFrac = 0.60f;
 
 // How far the tray is pulled, as a multiple of the board's thickness. The tray comes out towards
 // the player rather than sideways, so the distance that matters is how deep the board is: enough
@@ -526,6 +526,11 @@ StaticMesh3D* Connect4Scene::CreateDisc(const char* name)
     disc->SetScale(mDiscScale);
     disc->SetRotation(mDiscRotation);
 
+    // These are moved by script every frame. If the mesh brought collision in with it and anything
+    // started simulating them, the two would fight and the result would look like a disc jamming.
+    disc->EnablePhysics(false);
+    disc->EnableCollision(false);
+
     disc->SetVisible(false);
 
     return disc;
@@ -951,6 +956,20 @@ void Connect4Scene::BeginRerack()
             {
                 mTrayAxis = -mTrayAxis;
             }
+
+            // The discs go the other way, towards the player, and level rather than tilted up at
+            // the camera.
+            mSpillAxis = -mTrayAxis;
+            mSpillAxis.y = 0.0f;
+
+            if (glm::length(mSpillAxis) > 0.0001f)
+            {
+                mSpillAxis = glm::normalize(mSpillAxis);
+            }
+            else
+            {
+                mSpillAxis = glm::vec3(0.0f);
+            }
         }
     }
 
@@ -976,11 +995,13 @@ void Connect4Scene::BeginRerack()
 
         const float spacing = mLayout.GetRowSpacing();
 
-        // Sideways drift only. They start held in their slots and are let go when the tray is
-        // pulled, so gravity supplies the downward speed rather than the disc being thrown.
-        disc.mVelocity = glm::vec3(rx * spacing * 0.9f,
-                                   0.0f,
-                                   rz * spacing * 0.6f);
+        // Spill outwards, towards the player, as well as drifting sideways. Dropping straight
+        // down leaves every disc inside the board's own footprint, where it is hard to tell a disc
+        // that has landed on the table from one that has stopped somewhere it should not have; and
+        // discs falling out of a board that has just been lifted off them would spread anyway.
+        // Gravity supplies the downward speed -- they are released, not thrown.
+        disc.mVelocity = mSpillAxis * (spacing * 0.9f)
+                       + glm::vec3(rx * spacing * 0.8f, 0.0f, rz * spacing * 0.8f);
         disc.mSpin = rs * 540.0f;
     }
 }
