@@ -1298,15 +1298,23 @@ void Connect4Scene::RetireDisc(Disc& disc)
     disc.mNode->EnablePhysics(false);
     disc.mNode->EnableCollision(false);
 
-    // Only a disc actually standing on its edge is laid down.
+    // Near enough flat already: leave it exactly where the simulation put it.
+    if (uprightness > 0.85f)
+    {
+        return;
+    }
+
+    // A disc lying on the table has nothing to lean on, so it cannot rest at an angle -- it falls
+    // over, every time. One resting on top of others can be propped at any angle it likes, and
+    // those arrangements are the best thing the simulation produces.
     //
-    // This used to lay down anything that was not nearly flat, which meant a disc leaning on top of
-    // another -- a perfectly good resting pose, and one the simulation produced on purpose -- was
-    // rotated flat and lowered for no reason. It read as the disc sliding sideways by itself.
-    //
-    // A disc on its edge has its face pointing sideways, so this is small for exactly the case
-    // that needs correcting and leaves every settled arrangement alone.
-    if (uprightness > 0.35f)
+    // So the question is not how tilted it is but whether there is anything under it. A disc on
+    // the table sits within about a radius of it however it is leaning; anything higher is on top
+    // of something else and is left alone.
+    const glm::vec3 position = disc.mNode->GetWorldPosition();
+    const bool restingOnTable = (position.y < mTableY + mDiscRadius * 1.25f);
+
+    if (!restingOnTable && uprightness > 0.3f)
     {
         return;
     }
@@ -1314,7 +1322,7 @@ void Connect4Scene::RetireDisc(Disc& disc)
     disc.mRotFrom = current;
     disc.mRotTo = ToppleRotation(current, mDiscFaceAxis);
 
-    disc.mPosFrom = disc.mNode->GetWorldPosition();
+    disc.mPosFrom = position;
     disc.mPosTo = disc.mPosFrom;
 
     // How far it has to come down is how far over it has to go: a disc on its edge is a radius up,
