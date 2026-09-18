@@ -100,29 +100,29 @@
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_specularGlossiness",
-			"uri":"textures/RedChips_specularGlossiness.png"
+			"uri":"RedChips_specularGlossiness.png"
 		},
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_normal",
-			"uri":"textures/RedChips_normal.png"
+			"uri":"RedChips_normal.png"
 		},
 		{
 			"mimeType":"image/jpeg",
 			"name":"RedChips_diffuse",
-			"uri":"textures/RedChips_diffuse.jpg"
+			"uri":"RedChips_diffuse.jpg"
 		},
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_specularGlossiness.png",
-			"uri":"textures/RedChips_specularGlossiness.png.png"
+			"uri":"RedChips_specularGlossiness.png.png"
 		}
 	],
 	"accessors":[
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":742,
+			"count":1708,
 			"max":[
 				0.46157535910606384,
 				2.4083821773529053,
@@ -138,57 +138,57 @@
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":742,
+			"count":1708,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":742,
+			"count":1708,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5126,
-			"count":742,
+			"count":1708,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":4,
 			"componentType":5123,
-			"count":3360,
+			"count":9156,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":8904,
+			"byteLength":20496,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":8904,
-			"byteOffset":8904,
+			"byteLength":20496,
+			"byteOffset":20496,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":5936,
-			"byteOffset":17808,
+			"byteLength":13664,
+			"byteOffset":40992,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":5936,
-			"byteOffset":23744,
+			"byteLength":13664,
+			"byteOffset":54656,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":6720,
-			"byteOffset":29680,
+			"byteLength":18312,
+			"byteOffset":68320,
 			"target":34963
 		}
 	],
@@ -200,7 +200,7 @@
 	],
 	"buffers":[
 		{
-			"byteLength":36400,
+			"byteLength":86632,
 			"uri":"Stack_Red.bin"
 		}
 	]

@@ -19,7 +19,13 @@
 	"nodes":[
 		{
 			"mesh":0,
-			"name":"RedChipSingle"
+			"name":"RedChipStack",
+			"rotation":[
+				0,
+				0,
+				0.7071068286895752,
+				0.7071067094802856
+			]
 		}
 	],
 	"materials":[
@@ -100,95 +106,95 @@
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_specularGlossiness",
-			"uri":"textures/RedChips_specularGlossiness.png"
+			"uri":"RedChips_specularGlossiness.png"
 		},
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_normal",
-			"uri":"textures/RedChips_normal.png"
+			"uri":"RedChips_normal.png"
 		},
 		{
 			"mimeType":"image/jpeg",
 			"name":"RedChips_diffuse",
-			"uri":"textures/RedChips_diffuse.jpg"
+			"uri":"RedChips_diffuse.jpg"
 		},
 		{
 			"mimeType":"image/png",
 			"name":"RedChips_specularGlossiness.png",
-			"uri":"textures/RedChips_specularGlossiness.png.png"
+			"uri":"RedChips_specularGlossiness.png.png"
 		}
 	],
 	"accessors":[
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":106,
+			"count":244,
 			"max":[
 				0.46157532930374146,
-				0.4501132667064667,
-				0.17072904109954834
+				0.1754041612148285,
+				0.43898484110832214
 			],
 			"min":[
-				-0.46157535910606384,
-				-0.42785581946372986,
-				-0.17270705103874207
+				-0.4615754187107086,
+				-0.16803185641765594,
+				-0.4389841854572296
 			],
 			"type":"VEC3"
 		},
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":106,
+			"count":244,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":106,
+			"count":244,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5126,
-			"count":106,
+			"count":244,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":4,
 			"componentType":5123,
-			"count":480,
+			"count":1308,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":1272,
+			"byteLength":2928,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":1272,
-			"byteOffset":1272,
+			"byteLength":2928,
+			"byteOffset":2928,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":848,
-			"byteOffset":2544,
+			"byteLength":1952,
+			"byteOffset":5856,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":848,
-			"byteOffset":3392,
+			"byteLength":1952,
+			"byteOffset":7808,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":960,
-			"byteOffset":4240,
+			"byteLength":2616,
+			"byteOffset":9760,
 			"target":34963
 		}
 	],
@@ -200,7 +206,7 @@
 	],
 	"buffers":[
 		{
-			"byteLength":5200,
+			"byteLength":12376,
 			"uri":"Chip_Red.bin"
 		}
 	]
