@@ -4,6 +4,7 @@
 #include "World.h"
 #include "Log.h"
 #include "AssetManager.h"
+#include "Renderer.h"
 #include "Assets/StaticMesh.h"
 #include "Assets/MaterialLite.h"
 #include "Nodes/Node.h"
@@ -571,6 +572,8 @@ bool Connect4Scene::Initialize()
         mCursorDisc = CreateDisc("CursorDisc");
     }
 
+    Renderer* renderer = Renderer::Get();
+
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
         char name[32];
@@ -583,6 +586,21 @@ bool Connect4Scene::Initialize()
         {
             mDiscs[i].mNode->SetVisible(false);
         }
+
+        // Drive the loading screen as the board is built. Every few discs rather than every one,
+        // since a frame costs far more than spawning a node and the point is to show progress, not
+        // to render forty-two frames.
+        if (renderer != nullptr && (i % 6) == 0)
+        {
+            const float progress = float(i) / float(C4::kCols * C4::kRows);
+            renderer->DrawLoadingFrame(progress, "Setting up the board...");
+        }
+    }
+
+    if (renderer != nullptr)
+    {
+        renderer->DrawLoadingFrame(1.0f, "Setting up the board...");
+        renderer->EnableLoadingScreen(false);
     }
 
     if (mCursorDisc != nullptr)
