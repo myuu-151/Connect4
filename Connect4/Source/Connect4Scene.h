@@ -12,6 +12,7 @@ class Node3D;
 class StaticMesh3D;
 class StaticMesh;
 class Material;
+class Box3D;
 
 // The presentation half of Connect Four: everything the rules layer deliberately knows nothing
 // about. Board.h decides what happens, this decides what it looks like.
@@ -113,8 +114,10 @@ private:
     void UpdateRerack(float deltaTime);
     void ResetBoardParts();
     void BuildObstacles();
-    void PushOutOfObstacles(glm::vec3& pos, glm::vec3& velocity) const;
-    void SeparateDiscs();
+    void BuildPhysicsColliders();
+    void StartDiscPhysics();
+    void StopDiscPhysics();
+    bool AreDiscsAsleep() const;
 
     Connect4Layout mLayout;
 
@@ -142,24 +145,11 @@ private:
         StaticMesh3D* mNode = nullptr;
         glm::vec3 mFrom = glm::vec3(0.0f);
         glm::vec3 mTo = glm::vec3(0.0f);
-        glm::vec3 mVelocity = glm::vec3(0.0f);   // rerack only
+        // Rerack: the speed the disc is let go with when the tray is pulled. Bullet takes over
+        // from there, so nothing here tracks how it falls, what it hits, or how it comes to rest.
+        glm::vec3 mVelocity = glm::vec3(0.0f);
 
-        // Rerack: the disc turns about this axis while it is in the air, at mSpin degrees a
-        // second. An axis rather than a single angle, because a disc dropping out of a board
-        // tumbles end over end and lands leaning; turning it about one fixed axis only ever spins
-        // it on the spot and it arrives as upright as it left.
-        glm::vec3 mTumbleAxis = glm::vec3(1.0f, 0.0f, 0.0f);
-        float mSpin = 0.0f;
         bool mInUse = false;
-
-        // Rerack: false while the disc is still inside the board and can only travel straight down
-        // its column, true once it is clear of the frame and free to spread.
-        bool mCleared = false;
-
-        // Toppling flat once it hits the table. Negative means it is not toppling.
-        float mFlatT = -1.0f;
-        glm::quat mRotFrom = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        glm::quat mRotTo = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     };
 
     Disc mDiscs[C4::kCols * C4::kRows];
@@ -190,11 +180,21 @@ private:
     // bottom of the stand.
     float mTableY = 0.0f;
 
-    // A disc standing on its edge rests a radius above the table; lying flat it rests half its
-    // thickness above it. Both are needed, because it arrives on edge and ends up flat, and the
-    // height has to follow it down as it falls over.
+    // In world units, for placing the static colliders and deciding when a disc has settled.
     float mDiscRadius = 0.0f;
     float mDiscHalfThickness = 0.0f;
+
+    // In the mesh's own units, for the collision shape. Primitive3D applies the node's world scale
+    // to whatever shape it is given, so a shape built from world measurements would come out
+    // scaled a second time.
+    float mDiscLocalRadius = 0.0f;
+    float mDiscLocalHalfThickness = 0.0f;
+
+    // The table and the stand's feet, as static bodies. Everything the discs land on.
+    Box3D* mGroundCollider = nullptr;
+    Box3D* mFootColliders[2] = { nullptr, nullptr };
+
+    bool mDiscPhysicsRunning = false;
 
     // Which of the chip model's local axes runs through the flat of the disc. Needed to work out
     // which way it is facing, since the model is free to be built along any of them.

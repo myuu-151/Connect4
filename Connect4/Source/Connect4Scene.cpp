@@ -11,6 +11,9 @@
 #include "Nodes/3D/Node3d.h"
 #include "Nodes/3D/StaticMesh3d.h"
 #include "Nodes/3D/Camera3d.h"
+#include "Nodes/3D/Box3d.h"
+
+#include "BulletCollision/CollisionShapes/btCylinderShape.h"
 
 #include <math.h>
 
@@ -86,57 +89,11 @@ const float kLiftFrac = 0.60f;
 // to be clearly out from under the slots, not so far it looks detached.
 const float kPullDepthMul = 2.2f;
 
-const float kRerackGravity = 20.0f;    // row-spacings per second squared
-const float kDiscRestitution = 0.32f;  // how much of the fall is given back as a bounce
-const float kDiscFriction = 0.78f;     // horizontal speed kept per bounce
-const float kDiscRestSpeed = 0.35f;    // below this, in row-spacings per second, a disc has stopped
-const float kToppleTime = 0.22f;       // how long a landed disc takes to fall flat
+// Gravity, bounce, friction and when a disc counts as stopped are Bullet's now, set per body in
+// StartDiscPhysics rather than hand-integrated here.
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
-
-// Where a disc ends up once it has fallen over: face up, reached by the shortest tip from wherever
-// it currently is.
-//
-// Taking the shortest arc is what makes it look like falling rather than being turned. A disc
-// standing on its edge can fall either way, and the shortest arc follows whichever way it is
-// already leaning; a lean is added from the direction it is travelling, so one skidding across the
-// table falls the way it is going instead of picking a side arbitrarily.
-glm::quat ToppleRotation(const glm::quat& current, int32_t faceAxis, const glm::vec3& travel)
-{
-    // The face normal in the model's own axes, then in the world.
-    glm::vec3 localNormal(0.0f);
-    localNormal[glm::clamp(faceAxis, 0, 2)] = 1.0f;
-
-    glm::vec3 normal = current * localNormal;
-
-    const float normalLen = glm::length(normal);
-    normal = (normalLen > 0.0001f) ? (normal / normalLen) : glm::vec3(0.0f, 1.0f, 0.0f);
-
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
-
-    // Either face can end up on top, so tip towards whichever is nearer; forcing a particular face
-    // upwards would make some discs turn most of the way round to get there.
-    glm::vec3 target = (glm::dot(normal, up) < 0.0f) ? -up : up;
-
-    glm::vec3 axis = glm::cross(normal, target);
-
-    if (glm::length(axis) < 0.001f)
-    {
-        // Already flat, or exactly upside down: nudge it with the direction of travel so the
-        // choice is not arbitrary.
-        axis = glm::cross(normal, glm::vec3(travel.x, 0.0f, travel.z));
-
-        if (glm::length(axis) < 0.001f)
-        {
-            axis = glm::vec3(1.0f, 0.0f, 0.0f);
-        }
-    }
-
-    const float angle = acosf(glm::clamp(glm::dot(normal, target), -1.0f, 1.0f));
-
-    return glm::angleAxis(angle, glm::normalize(axis)) * current;
-}
 
 // Smoothstep, for the cursor slide.
 float EaseInOut(float t)
@@ -517,11 +474,12 @@ bool Connect4Scene::Initialize()
             mDiscHalfThickness = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
             mDiscRadius = glm::max(glm::max(discSize.x, discSize.y), discSize.z) * 0.5f;
 
-            // The thin direction is the one through the flat of the disc. Measured on the model's
-            // own axes rather than in world, since that is the axis a rotation has to be built
-            // around to lay it down.
             const glm::vec3 localSize = discMax - discMin;
+            mDiscLocalHalfThickness = glm::min(glm::min(localSize.x, localSize.y), localSize.z) * 0.5f;
+            mDiscLocalRadius = glm::max(glm::max(localSize.x, localSize.y), localSize.z) * 0.5f;
 
+            // The thin direction is the one through the flat of the disc. Measured on the model's
+            // own axes, since that is the axis the collision cylinder has to be built around.
             if (localSize.x <= localSize.y && localSize.x <= localSize.z)
                 mDiscFaceAxis = 0;
             else if (localSize.y <= localSize.x && localSize.y <= localSize.z)
@@ -532,6 +490,7 @@ bool Connect4Scene::Initialize()
     }
 
     BuildObstacles();
+    BuildPhysicsColliders();
 
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
              mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
@@ -943,146 +902,27 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
     case RerackPhase::Fall:
     {
-        const float spacing = mLayout.GetRowSpacing();
-        const float gravity = kRerackGravity * spacing;
-        const float restSpeed = kDiscRestSpeed * spacing;
-
-        // The underside of the grid where it now stands, having been lifted. A disc is out of the
-        // board once it is below this.
-        const float exitY = mFrameBottomY + mLiftDistance;
-
-        bool anyMoving = false;
-
-        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        // Bullet has it from here. Everything up to this point was placed by hand -- the discs were
+        // held in the grid while it lifted -- and the moment the tray is out of the way they become
+        // rigid bodies and fall, land, bounce off the stand's feet and off each other.
+        //
+        // This is the one part of the game that is simulated. The board is decided by the rules
+        // long before any of it runs, so nothing here can affect the outcome; it only has to look
+        // right, which is exactly what physics is good at and what hand-written motion kept getting
+        // wrong -- discs landed flat every time because they were told to, with no contacts to
+        // decide otherwise.
+        if (!mDiscPhysicsRunning)
         {
-            Disc& disc = mDiscs[i];
-
-            if (!disc.mInUse || disc.mNode == nullptr)
-            {
-                continue;
-            }
-
-            glm::vec3 pos = disc.mNode->GetWorldPosition();
-
-            // How high the disc's centre sits when resting depends on how far over it is. On edge
-            // that is a radius; flat it is half its thickness. Interpolating between the two as it
-            // falls over is what lets it pivot down onto its face instead of hovering at one height
-            // and snapping.
-            const float toppleT = (disc.mFlatT < 0.0f) ? 0.0f : glm::min(disc.mFlatT, 1.0f);
-            const float restY = mTableY + glm::mix(mDiscRadius, mDiscHalfThickness, toppleT);
-
-            const bool toppling = (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f);
-            const bool stopped = (pos.y <= restY + 0.0001f && glm::length(disc.mVelocity) < restSpeed);
-
-            if (stopped && !toppling)
-            {
-                continue;
-            }
-
-            anyMoving = true;
-
-            // The topple runs on its own clock once it has started, whether or not the disc is
-            // still sliding. It begins the moment the disc touches down rather than after it has
-            // come to a complete stop, which is what made it look like a flick at the last second.
-            if (toppling)
-            {
-                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
-
-                // Accelerating rather than eased at both ends: something falling over starts slowly
-                // and arrives fast, and easing out made it settle as though it were being lowered.
-                const float fall = disc.mFlatT * disc.mFlatT;
-                disc.mNode->SetWorldRotation(glm::slerp(disc.mRotFrom, disc.mRotTo, fall));
-            }
-
-            if (stopped)
-            {
-                // Still toppling, but no longer moving: hold it on the table at the height its
-                // current lean calls for.
-                pos.y = restY;
-                disc.mNode->SetWorldPosition(pos);
-                continue;
-            }
-
-            // Clear of the board? Then it can start to spread. Until it is, only gravity acts on
-            // it, so it drops down the column and out through the bottom.
-            if (!disc.mCleared && pos.y <= exitY)
-            {
-                disc.mCleared = true;
-
-                // mFrom is holding the spread this disc was given when it was released; it is not
-                // needed as a start point once the fall is under way.
-                disc.mVelocity.x = disc.mFrom.x;
-                disc.mVelocity.z = disc.mFrom.z;
-            }
-
-            disc.mVelocity.y -= gravity * deltaTime;
-            pos += disc.mVelocity * deltaTime;
-
-            // Anything in the way: the stand's feet sit on the table exactly where the discs
-            // spread out to.
-            PushOutOfObstacles(pos, disc.mVelocity);
-
-            if (pos.y < restY)
-            {
-                pos.y = restY;
-
-                // Bounce, giving back a fraction of the impact and scrubbing off horizontal speed
-                // as it skids. Discs land flat and do not bounce much, so the numbers are low.
-                disc.mVelocity.y = -disc.mVelocity.y * kDiscRestitution;
-                disc.mVelocity.x *= kDiscFriction;
-                disc.mVelocity.z *= kDiscFriction;
-                disc.mSpin *= kDiscFriction;
-
-                // Start falling over on contact. A disc arrives on its edge, the way it sat in its
-                // slot, and the moment an edge touches the table it is already going over -- so the
-                // topple belongs here, at the first touch, not after it has finished sliding.
-                if (disc.mFlatT < 0.0f)
-                {
-                    disc.mRotFrom = disc.mNode->GetWorldRotationQuat();
-                    disc.mRotTo = ToppleRotation(disc.mRotFrom, mDiscFaceAxis, disc.mVelocity);
-                    disc.mFlatT = 0.0f;
-                }
-
-                if (glm::abs(disc.mVelocity.y) < restSpeed)
-                {
-                    disc.mVelocity.y = 0.0f;
-                }
-            }
-
-            disc.mNode->SetWorldPosition(pos);
-
-            // Tumble only once it is out of the board. Turning while still between the slats made
-            // it look as though the frame were not there at all.
-            //
-            // About its own axis, as a rotation applied to whatever orientation it already has,
-            // so it leans further the longer it falls and meets the table at an angle. Adding to
-            // one euler component instead spun it in place and it arrived dead upright, which is
-            // what made the landing look like a flick rather than a fall.
-            if (disc.mCleared && disc.mFlatT < 0.0f)
-            {
-                const glm::quat turn = glm::angleAxis(glm::radians(disc.mSpin * deltaTime),
-                                                      disc.mTumbleAxis);
-
-                disc.mNode->SetWorldRotation(turn * disc.mNode->GetWorldRotationQuat());
-            }
-
-            if (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f)
-            {
-                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
-                disc.mNode->SetWorldRotation(
-                    glm::slerp(disc.mRotFrom, disc.mRotTo, EaseInOut(disc.mFlatT)));
-            }
+            StartDiscPhysics();
         }
 
-        // Once everything has moved, push apart anything that ended up overlapping. Done as a
-        // pass over the whole set rather than inside the movement loop, so a disc moved by the
-        // separation is not then moved again by its own update in the same frame.
-        SeparateDiscs();
+        // Give them a moment before checking: they start slow, and asking immediately would find
+        // everything below the threshold and finish before anything had fallen.
+        const bool longEnough = (mRerackTime > 0.5f);
 
-        // Move on once they have stopped, rather than after a fixed time, so the board is never
-        // reset out from under a disc still rolling. The time limit is only a backstop.
-        if (!anyMoving || mRerackTime > 4.0f)
+        if ((longEnough && AreDiscsAsleep()) || mRerackTime > 6.0f)
         {
+            StopDiscPhysics();
             mRerackPhase = RerackPhase::Settle;
             mRerackTime = 0.0f;
         }
@@ -1108,81 +948,175 @@ void Connect4Scene::UpdateRerack(float deltaTime)
     }
 }
 
-// Keep the discs out of one another. They are circles lying on a table, so overlap is a distance
-// in the plane of the table and nothing more elaborate is called for: a pair that is too close is
-// pushed apart along the line between them, each taking half.
-//
-// Only discs at roughly the same height are compared, so one that has come to rest on top of
-// another is left where it is rather than being shoved sideways off it.
-//
-// Forty-two discs is 861 pairs, which is nothing for the second or so a rerack lasts.
-void Connect4Scene::SeparateDiscs()
+void Connect4Scene::BuildPhysicsColliders()
 {
-    const uint32_t kNumDiscs = C4::kCols * C4::kRows;
-    const float minDistance = mDiscRadius * 2.0f;
-    const float sameLevel = glm::max(mDiscHalfThickness * 2.0f, 0.0001f);
+    World* world = GetWorld(0);
+    Node* root = world ? world->GetRootNode() : nullptr;
 
-    for (uint32_t i = 0; i < kNumDiscs; ++i)
+    if (root == nullptr || mDiscRadius <= 0.0f)
     {
-        if (!mDiscs[i].mInUse || mDiscs[i].mNode == nullptr)
+        return;
+    }
+
+    Node3D* root3d = root->As<Node3D>();
+
+    if (root3d == nullptr)
+    {
+        return;
+    }
+
+    auto makeStaticBox = [&](const char* name, glm::vec3 center, glm::vec3 extents) -> Box3D*
+    {
+        Box3D* box = root3d->CreateChild<Box3D>();
+
+        if (box == nullptr)
+        {
+            return nullptr;
+        }
+
+        box->SetName(name);
+        box->SetExtents(extents);
+        box->SetWorldPosition(center);
+
+        // Mass zero is what makes a body static in Bullet: it collides and never moves.
+        box->SetMass(0.0f);
+        box->SetFriction(0.7f);
+        box->SetRestitution(0.1f);
+        box->EnableCollision(true);
+        box->EnablePhysics(true);
+
+        // Present for collision only; there is already a table and a stand to look at.
+        box->SetVisible(false);
+
+        return box;
+    };
+
+    // The table. Sized from the board rather than from the room, since the room's own collision is
+    // not something this can rely on: wide enough that a disc cannot skid off the end of it, and
+    // thick enough that nothing can tunnel through at the speeds involved.
+    const float tableHalfWidth = mLayout.GetColSpacing() * 12.0f;
+    const float tableThickness = mDiscRadius * 8.0f;
+
+    const glm::vec3 boardCenter = mLayout.GetStillPoint(C4::kCols / 2, 0);
+
+    mGroundCollider = makeStaticBox(
+        "RerackGround",
+        glm::vec3(boardCenter.x, mTableY - tableThickness * 0.5f, boardCenter.z),
+        glm::vec3(tableHalfWidth * 2.0f, tableThickness, tableHalfWidth * 2.0f));
+
+    // The feet, already measured for their boxes.
+    for (uint32_t i = 0; i < mNumObstacles && i < 2; ++i)
+    {
+        const glm::vec3 center = (mObstacles[i].mMin + mObstacles[i].mMax) * 0.5f;
+        const glm::vec3 extents = mObstacles[i].mMax - mObstacles[i].mMin;
+
+        char name[24];
+        snprintf(name, sizeof(name), "RerackFoot%u", i);
+
+        mFootColliders[i] = makeStaticBox(name, center, extents);
+    }
+
+    LogDebug("C4: colliders ground %s feet %u",
+             mGroundCollider ? "ok" : "FAILED", mNumObstacles);
+}
+
+// Hand the discs over to Bullet. Up to this point they have been placed by hand -- they were held
+// in the grid while it lifted -- so their bodies are started from wherever they currently are.
+void Connect4Scene::StartDiscPhysics()
+{
+    const float spacing = mLayout.GetRowSpacing();
+
+    uint32_t seed = 0x51ED2701u;
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (!disc.mInUse || disc.mNode == nullptr)
         {
             continue;
         }
 
-        for (uint32_t j = i + 1; j < kNumDiscs; ++j)
+        // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
+        // and in the model's own units, since the node's scale is applied to the shape on top.
+        btCollisionShape* shape = nullptr;
+        const float r = mDiscLocalRadius;
+        const float h = mDiscLocalHalfThickness;
+
+        switch (mDiscFaceAxis)
         {
-            if (!mDiscs[j].mInUse || mDiscs[j].mNode == nullptr)
-            {
-                continue;
-            }
+        case 0:  shape = new btCylinderShapeX(btVector3(h, r, r)); break;
+        case 1:  shape = new btCylinderShape(btVector3(r, h, r));  break;
+        default: shape = new btCylinderShapeZ(btVector3(r, r, h)); break;
+        }
 
-            glm::vec3 a = mDiscs[i].mNode->GetWorldPosition();
-            glm::vec3 b = mDiscs[j].mNode->GetWorldPosition();
+        disc.mNode->SetCollisionShape(shape);
 
-            if (glm::abs(a.y - b.y) > sameLevel)
-            {
-                continue;
-            }
+        disc.mNode->SetMass(0.05f);
+        disc.mNode->SetFriction(0.55f);
+        disc.mNode->SetRollingFriction(0.02f);   // or they roll on their edges forever
+        disc.mNode->SetRestitution(0.18f);
+        disc.mNode->SetLinearDamping(0.05f);
+        disc.mNode->SetAngularDamping(0.12f);
 
-            const float dx = a.x - b.x;
-            const float dz = a.z - b.z;
-            const float dist2 = dx * dx + dz * dz;
+        disc.mNode->EnableCollision(true);
+        disc.mNode->EnablePhysics(true);
 
-            if (dist2 >= minDistance * minDistance)
-            {
-                continue;
-            }
+        // Start the body where the node already is, rather than wherever it was when the body was
+        // last created.
+        disc.mNode->FullSyncRigidBodyTransform();
 
-            float dist = sqrtf(dist2);
-            glm::vec3 push;
+        // The spread it was given when the tray was pulled, and a turn to go with it.
+        seed = seed * 1664525u + 1013904223u;
+        const float ax = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+        seed = seed * 1664525u + 1013904223u;
+        const float ay = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+        seed = seed * 1664525u + 1013904223u;
+        const float az = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
 
-            if (dist > 0.0001f)
-            {
-                push = glm::vec3(dx / dist, 0.0f, dz / dist);
-            }
-            else
-            {
-                // Exactly on top of each other: any direction will do, but it has to be a
-                // consistent one or the pair will jitter.
-                push = glm::vec3(1.0f, 0.0f, 0.0f);
-                dist = 0.0f;
-            }
+        disc.mNode->SetLinearVelocity(disc.mFrom);
+        disc.mNode->SetAngularVelocity(glm::vec3(ax, ay, az) * spacing * 18.0f);
+    }
 
-            const float overlap = (minDistance - dist) * 0.5f;
+    mDiscPhysicsRunning = true;
+}
 
-            a += push * overlap;
-            b -= push * overlap;
-
-            mDiscs[i].mNode->SetWorldPosition(a);
-            mDiscs[j].mNode->SetWorldPosition(b);
-
-            // Take some speed out of the pair, so a crowd settles instead of shuffling.
-            mDiscs[i].mVelocity.x *= kDiscFriction;
-            mDiscs[i].mVelocity.z *= kDiscFriction;
-            mDiscs[j].mVelocity.x *= kDiscFriction;
-            mDiscs[j].mVelocity.z *= kDiscFriction;
+void Connect4Scene::StopDiscPhysics()
+{
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        if (mDiscs[i].mNode != nullptr && mDiscs[i].mNode->IsPhysicsEnabled())
+        {
+            mDiscs[i].mNode->EnablePhysics(false);
+            mDiscs[i].mNode->EnableCollision(false);
         }
     }
+
+    mDiscPhysicsRunning = false;
+}
+
+// Settled when nothing is moving any more. Asked of the bodies rather than timed, so the board is
+// never put back together while a disc is still rolling.
+bool Connect4Scene::AreDiscsAsleep() const
+{
+    const float threshold = mLayout.GetRowSpacing() * 0.25f;
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        const Disc& disc = mDiscs[i];
+
+        if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
+        {
+            continue;
+        }
+
+        if (glm::length(disc.mNode->GetLinearVelocity()) > threshold)
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void Connect4Scene::BuildObstacles()
@@ -1264,62 +1198,6 @@ void Connect4Scene::BuildObstacles()
     }
 
     LogDebug("C4: %u stand obstacle(s)", mNumObstacles);
-}
-
-void Connect4Scene::PushOutOfObstacles(glm::vec3& pos, glm::vec3& velocity) const
-{
-    for (uint32_t i = 0; i < mNumObstacles; ++i)
-    {
-        const Obstacle& box = mObstacles[i];
-
-        // Give the box the disc's radius, so the disc stops when its edge meets the foot rather
-        // than when its centre does.
-        const float r = mDiscRadius;
-
-        if (pos.x < box.mMin.x - r || pos.x > box.mMax.x + r ||
-            pos.z < box.mMin.z - r || pos.z > box.mMax.z + r ||
-            pos.y > box.mMax.y + r)
-        {
-            continue;
-        }
-
-        // Push out along whichever face is nearest, so a disc arriving at a side slides off it
-        // rather than being shoved along the axis it happened to be travelling.
-        const float dxMin = pos.x - (box.mMin.x - r);
-        const float dxMax = (box.mMax.x + r) - pos.x;
-        const float dzMin = pos.z - (box.mMin.z - r);
-        const float dzMax = (box.mMax.z + r) - pos.z;
-        const float dyTop = (box.mMax.y + r) - pos.y;
-
-        const float smallest = glm::min(glm::min(glm::min(dxMin, dxMax), glm::min(dzMin, dzMax)), dyTop);
-
-        if (smallest == dyTop)
-        {
-            // Resting on top of the foot.
-            pos.y = box.mMax.y + r;
-            velocity.y = glm::max(velocity.y, 0.0f);
-        }
-        else if (smallest == dxMin)
-        {
-            pos.x = box.mMin.x - r;
-            velocity.x = -velocity.x * kDiscRestitution;
-        }
-        else if (smallest == dxMax)
-        {
-            pos.x = box.mMax.x + r;
-            velocity.x = -velocity.x * kDiscRestitution;
-        }
-        else if (smallest == dzMin)
-        {
-            pos.z = box.mMin.z - r;
-            velocity.z = -velocity.z * kDiscRestitution;
-        }
-        else
-        {
-            pos.z = box.mMax.z + r;
-            velocity.z = -velocity.z * kDiscRestitution;
-        }
-    }
 }
 
 void Connect4Scene::ResetBoardParts()
@@ -1446,12 +1324,8 @@ void Connect4Scene::BeginRerack()
         const float rx = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
         seed = seed * 1664525u + 1013904223u;
         const float rz = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-        seed = seed * 1664525u + 1013904223u;
-        const float rs = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-        seed = seed * 1664525u + 1013904223u;
-        const float ra = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-        seed = seed * 1664525u + 1013904223u;
-        const float rb = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+        // Only the sideways spread is decided here. The turn each disc picks up is set with its
+        // body in StartDiscPhysics, along with everything else Bullet needs.
 
         const float spacing = mLayout.GetRowSpacing();
 
@@ -1461,8 +1335,6 @@ void Connect4Scene::BeginRerack()
         //
         // The spread is held here and applied the moment it clears the frame.
         disc.mVelocity = glm::vec3(0.0f);
-        disc.mCleared = false;
-        disc.mFlatT = -1.0f;
 
         // Spread mostly across the table rather than towards the player. Sending them at the
         // camera walked the front row into the near clip plane, which cuts geometry on a flat
@@ -1475,21 +1347,14 @@ void Connect4Scene::BeginRerack()
                    + mSpreadAxis * (rx * spacing * 4.5f)
                    + glm::vec3(0.0f, 0.0f, rz * spacing * 0.6f);
 
-        // Mostly horizontal, so the disc goes over end over end rather than spinning flat like a
-        // coin on a table. The vertical part is small and only keeps them from all tumbling the
-        // same way.
-        glm::vec3 axis(ra, rb * 0.25f, rs);
-
-        disc.mTumbleAxis = (glm::length(axis) > 0.01f)
-                         ? glm::normalize(axis)
-                         : glm::vec3(1.0f, 0.0f, 0.0f);
-
-        disc.mSpin = 160.0f + glm::abs(rs) * 340.0f;
     }
 }
 
 void Connect4Scene::ClearDiscs()
 {
+    // Nothing should still be simulated once the discs are back in the pool.
+    StopDiscPhysics();
+
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
         if (mDiscs[i].mNode != nullptr)
@@ -1504,10 +1369,6 @@ void Connect4Scene::ClearDiscs()
 
         mDiscs[i].mInUse = false;
         mDiscs[i].mVelocity = glm::vec3(0.0f);
-        mDiscs[i].mSpin = 0.0f;
-        mDiscs[i].mTumbleAxis = glm::vec3(1.0f, 0.0f, 0.0f);
-        mDiscs[i].mCleared = false;
-        mDiscs[i].mFlatT = -1.0f;
     }
 
     mNumDiscsUsed = 0;
