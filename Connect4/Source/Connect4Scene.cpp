@@ -970,7 +970,7 @@ void Connect4Scene::UpdateRerack(float deltaTime)
                 {
                     // Bleed it off over about a second rather than stopping it dead, so it winds
                     // down and topples instead of freezing mid-spin.
-                    disc.mNode->SetAngularVelocity(angular * glm::max(0.0f, 1.0f - deltaTime * 3.0f));
+                    disc.mNode->SetAngularVelocity(angular * glm::max(0.0f, 1.0f - deltaTime * 6.0f));
                 }
             }
         }
@@ -1258,6 +1258,7 @@ void Connect4Scene::StopDiscPhysics()
 bool Connect4Scene::AreDiscsAsleep() const
 {
     const float threshold = mLayout.GetRowSpacing() * 0.25f;
+    const float spinThreshold = 0.6f;
 
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
@@ -1269,6 +1270,15 @@ bool Connect4Scene::AreDiscsAsleep() const
         }
 
         if (glm::length(disc.mNode->GetLinearVelocity()) > threshold)
+        {
+            return false;
+        }
+
+        // Turning counts as moving. Asking only about linear speed called a disc spinning on the
+        // spot settled, which ended the fall while it was still going -- and with the fall over,
+        // the damping that would have stopped it stopped running too. It then span until the discs
+        // were cleared, which is exactly what it looked like.
+        if (glm::length(disc.mNode->GetAngularVelocity()) > spinThreshold)
         {
             return false;
         }
