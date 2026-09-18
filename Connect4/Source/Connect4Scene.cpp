@@ -89,9 +89,29 @@ const float kRerackGravity = 20.0f;    // row-spacings per second squared
 const float kDiscRestitution = 0.32f;  // how much of the fall is given back as a bounce
 const float kDiscFriction = 0.78f;     // horizontal speed kept per bounce
 const float kDiscRestSpeed = 0.35f;    // below this, in row-spacings per second, a disc has stopped
+const float kToppleTime = 0.22f;       // how long a landed disc takes to fall flat
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
+
+// The orientation a disc ends up in once it has fallen over: flat on the table, face up, turned by
+// some arbitrary amount so a heap of them does not look stamped from one mould.
+//
+// Built from whichever model axis runs through the flat of the disc, rather than assuming the chip
+// was modelled facing any particular way.
+glm::quat FlatRotation(int32_t faceAxis, float yawDegrees)
+{
+    glm::quat layDown;
+
+    switch (faceAxis)
+    {
+    case 0:  layDown = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 0, 1)); break;
+    case 1:  layDown = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); break;
+    default: layDown = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0)); break;
+    }
+
+    return glm::angleAxis(glm::radians(yawDegrees), glm::vec3(0, 1, 0)) * layDown;
+}
 
 // Smoothstep, for the cursor slide.
 float EaseInOut(float t)
@@ -469,6 +489,18 @@ bool Connect4Scene::Initialize()
 
             const glm::vec3 discSize = worldMax - worldMin;
             mDiscRestOffset = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
+
+            // The thin direction is the one through the flat of the disc. Measured on the model's
+            // own axes rather than in world, since that is the axis a rotation has to be built
+            // around to lay it down.
+            const glm::vec3 localSize = discMax - discMin;
+
+            if (localSize.x <= localSize.y && localSize.x <= localSize.z)
+                mDiscFaceAxis = 0;
+            else if (localSize.y <= localSize.x && localSize.y <= localSize.z)
+                mDiscFaceAxis = 1;
+            else
+                mDiscFaceAxis = 2;
         }
     }
 
@@ -920,12 +952,34 @@ void Connect4Scene::UpdateRerack(float deltaTime)
                 {
                     disc.mVelocity = glm::vec3(0.0f);
                     disc.mSpin = 0.0f;
+
+                    // Down flat. A disc leaves the board standing on edge, the way it sat in its
+                    // slot, and a disc on edge does not stay there.
+                    if (disc.mFlatT < 0.0f)
+                    {
+                        disc.mRotFrom = disc.mNode->GetWorldRotationQuat();
+                        disc.mRotTo = FlatRotation(mDiscFaceAxis, disc.mSpin + float(i) * 37.0f);
+                        disc.mFlatT = 0.0f;
+                    }
                 }
             }
 
             disc.mNode->SetWorldPosition(pos);
-            disc.mNode->SetRotation(disc.mNode->GetRotationEuler() +
-                                    glm::vec3(0.0f, 0.0f, disc.mSpin * deltaTime));
+
+            // Tumble only once it is out of the board. Spinning while still between the slats made
+            // it look as though the frame were not there at all.
+            if (disc.mCleared && disc.mFlatT < 0.0f)
+            {
+                disc.mNode->SetRotation(disc.mNode->GetRotationEuler() +
+                                        glm::vec3(0.0f, 0.0f, disc.mSpin * deltaTime));
+            }
+
+            if (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f)
+            {
+                disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kToppleTime, 1.0f);
+                disc.mNode->SetWorldRotation(
+                    glm::slerp(disc.mRotFrom, disc.mRotTo, EaseInOut(disc.mFlatT)));
+            }
         }
 
         // Move on once they have stopped, rather than after a fixed time, so the board is never
@@ -1080,6 +1134,7 @@ void Connect4Scene::BeginRerack()
         // The spread is held here and applied the moment it clears the frame.
         disc.mVelocity = glm::vec3(0.0f);
         disc.mCleared = false;
+        disc.mFlatT = -1.0f;
 
         disc.mFrom = mSpillAxis * (spacing * 0.9f)
                    + glm::vec3(rx * spacing * 0.8f, 0.0f, rz * spacing * 0.8f);
@@ -1105,6 +1160,8 @@ void Connect4Scene::ClearDiscs()
         mDiscs[i].mInUse = false;
         mDiscs[i].mVelocity = glm::vec3(0.0f);
         mDiscs[i].mSpin = 0.0f;
+        mDiscs[i].mCleared = false;
+        mDiscs[i].mFlatT = -1.0f;
     }
 
     mNumDiscsUsed = 0;

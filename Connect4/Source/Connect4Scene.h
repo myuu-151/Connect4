@@ -5,6 +5,7 @@
 #include "Board.h"
 
 #include "glm/glm.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 class Node;
 class Node3D;
@@ -145,6 +146,11 @@ private:
         // Rerack: false while the disc is still inside the board and can only travel straight down
         // its column, true once it is clear of the frame and free to spread.
         bool mCleared = false;
+
+        // Toppling flat once it hits the table. Negative means it is not toppling.
+        float mFlatT = -1.0f;
+        glm::quat mRotFrom = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::quat mRotTo = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     };
 
     Disc mDiscs[C4::kCols * C4::kRows];
@@ -174,6 +180,10 @@ private:
     // bottom of the stand.
     float mTableY = 0.0f;
     float mDiscRestOffset = 0.0f;
+
+    // Which of the chip model's local axes runs through the flat of the disc. Needed to lay one
+    // down on the table, since the model is free to be built along any of them.
+    int32_t mDiscFaceAxis = 2;
 
     // The underside of the frame, unlifted. A disc is still inside the board until it is below
     // this plus however far the grid has risen.
