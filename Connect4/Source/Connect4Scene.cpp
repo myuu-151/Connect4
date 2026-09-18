@@ -504,10 +504,16 @@ bool Connect4Scene::Initialize()
     mSlotBeginSound = LoadAsset<SoundWave>("slot_begin");
     mSlotEndSound = LoadAsset<SoundWave>("slot_end");
 
-    // The rerack sound is deliberately not loaded. It is the largest of the three and decoding it
-    // was what ran the machine out of memory, and unlike the other two it is not needed on every
-    // move -- so it is the cheapest thing to drop while the memory budget is sorted out.
-    mRerackSound = nullptr;
+    // rerack2 rather than rerack: mono at 22 kHz instead of stereo at 44, which is a quarter of
+    // the decoded PCM for a clatter nobody is listening to closely. The original ran the machine
+    // out of memory -- what costs is the decoded size, not the file, and these are the last assets
+    // loaded, so they are the ones that find nothing left.
+    mRerackSound = LoadAsset<SoundWave>("rerack2");
+
+    if (mRerackSound == nullptr)
+    {
+        mRerackSound = LoadAsset<SoundWave>("rerack");
+    }
 
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
              mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
@@ -1315,6 +1321,7 @@ void Connect4Scene::BeginRerack()
     mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
 
+    PlayRerackSound();
     HideCursorDisc();
 
     // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
