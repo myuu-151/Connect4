@@ -310,6 +310,16 @@ void Connect4Game::UpdateRerack(float deltaTime)
         return;
     }
 
+    // Then hold, with the discs where they fell and the grid still open, until the button is
+    // pressed. The simulation is the best thing to look at in the game and it used to be cleared
+    // away a moment after it finished; there is nothing to be gained by hurrying it, and the next
+    // game starts on a press either way.
+    if (!IsGamepadButtonJustDown(GAMEPAD_A, kPad) &&
+        !IsGamepadButtonJustDown(GAMEPAD_START, kPad))
+    {
+        return;
+    }
+
     NewGame();
 }
 

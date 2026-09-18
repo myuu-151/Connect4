@@ -125,6 +125,7 @@ private:
     void StopDiscPhysics();
     bool AreDiscsAsleep() const;
     void UpdateToppling(float deltaTime);
+    void UpdateDiscRetirement(float deltaTime);
 
     Connect4Layout mLayout;
 

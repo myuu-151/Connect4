@@ -889,6 +889,12 @@ void Connect4Scene::Update(float deltaTime)
     }
 
     UpdateRerack(deltaTime);
+
+    // Outside the rerack's phases on purpose. The discs are left simulating once it has nominally
+    // finished so the result can be watched for as long as anyone likes, which means stragglers
+    // still have to be retired and laid down after the phases are over.
+    UpdateDiscRetirement(deltaTime);
+    UpdateToppling(deltaTime);
 }
 
 void Connect4Scene::UpdateRerack(float deltaTime)
@@ -899,8 +905,6 @@ void Connect4Scene::UpdateRerack(float deltaTime)
     }
 
     mRerackTime += deltaTime;
-
-    UpdateToppling(deltaTime);
 
     switch (mRerackPhase)
     {
@@ -977,50 +981,6 @@ void Connect4Scene::UpdateRerack(float deltaTime)
             StartDiscPhysics();
         }
 
-        // Retire each disc as it stops travelling, rather than waiting for all forty-two to be
-        // still at once.
-        //
-        // This does two jobs at once. A disc balanced on its edge will spin like a coin for as
-        // long as Bullet is asked to keep simulating it -- the contact is effectively a point, so
-        // there is almost nothing to slow it, and damping it only for it to be spun up again by
-        // the next contact was chasing the symptom. Taking it out of the simulation ends it
-        // outright.
-        //
-        // And it is the cost: every retired disc is one fewer body in the broadphase and one fewer
-        // pile of contacts for the solver, so the heaviest moment thins out steadily instead of
-        // staying at full weight until the last disc happens to settle.
-        //
-        // The test is on travel, not on turning. A disc rolling away on its edge is turning fast
-        // and is the best thing the simulation does, so it keeps its place until it actually stops
-        // going anywhere.
-        {
-            const float goingNowhere = mLayout.GetRowSpacing() * 0.35f;
-
-            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
-            {
-                Disc& disc = mDiscs[i];
-
-                if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
-                {
-                    continue;
-                }
-
-                if (glm::length(disc.mNode->GetLinearVelocity()) < goingNowhere)
-                {
-                    disc.mSlowTime += deltaTime;
-                }
-                else
-                {
-                    disc.mSlowTime = 0.0f;
-                }
-
-                if (disc.mSlowTime > kDiscRetireTime)
-                {
-                    RetireDisc(disc);
-                }
-            }
-        }
-
         // The clatter plays on the first disc to reach the table, not when they are let go. They
         // are released at the top of the board and fall for the best part of a second, so playing
         // it on release put the sound well ahead of anything hitting anything.
@@ -1049,7 +1009,12 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
         if ((longEnough && AreDiscsAsleep()) || mRerackTime > 3.5f)
         {
-            StopDiscPhysics();
+            // Deliberately without stopping the simulation. Anything still moving carries on --
+            // the board now waits for a button before it is set up again, so the last discs to
+            // settle should be allowed to finish rather than being frozen at the moment the rest
+            // of them happen to be still. Discs are retired one at a time as they come to rest,
+            // which is what keeps the cost down; there is nothing to be gained by switching off
+            // the ones that are still doing something.
             mRerackPhase = RerackPhase::Settle;
             mRerackTime = 0.0f;
         }
@@ -1059,11 +1024,12 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
     case RerackPhase::Settle:
     {
-        // A beat with the discs lying on the table before the board goes back together.
+        // The discs are left lying where they fell and the grid stays open. Clearing them here
+        // meant the result of the simulation was on screen for about a second before being tidied
+        // away; the game now decides when to put the board back, so it can be looked at for as
+        // long as anyone wants.
         if (mRerackTime >= kSettleTime)
         {
-            ResetBoardParts();
-            ClearDiscs();
             mRerackPhase = RerackPhase::Idle;
         }
 
@@ -1346,6 +1312,57 @@ void Connect4Scene::RetireDisc(Disc& disc)
 
 // Advance any disc that is in the middle of falling over. Runs whatever the rerack is doing, since
 // a disc retired late is still on its way down when the rest have finished.
+// Retire each disc as it stops travelling, rather than waiting for all forty-two to be still at
+// once.
+//
+// This does two jobs. A disc balanced on its edge will spin like a coin for as long as Bullet is
+// asked to keep simulating it -- the contact is effectively a point, so there is almost nothing to
+// slow it. Taking it out of the simulation ends that outright, and RetireDisc lays it down.
+//
+// And it is the cost: every retired disc is one fewer body in the broadphase and one fewer pile of
+// contacts for the solver, so the heaviest moment thins out steadily instead of staying at full
+// weight until the last disc happens to settle.
+//
+// The test is on travel, not on turning. A disc rolling away on its edge is turning fast and is
+// the best thing the simulation does, so it keeps its place until it actually stops going
+// anywhere.
+//
+// Runs every frame rather than only during the fall: the discs are left simulating after the
+// rerack has nominally finished, so that they can be watched, and stragglers still need retiring.
+void Connect4Scene::UpdateDiscRetirement(float deltaTime)
+{
+    if (!mDiscPhysicsRunning)
+    {
+        return;
+    }
+
+    const float goingNowhere = mLayout.GetRowSpacing() * 0.35f;
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
+        {
+            continue;
+        }
+
+        if (glm::length(disc.mNode->GetLinearVelocity()) < goingNowhere)
+        {
+            disc.mSlowTime += deltaTime;
+        }
+        else
+        {
+            disc.mSlowTime = 0.0f;
+        }
+
+        if (disc.mSlowTime > kDiscRetireTime)
+        {
+            RetireDisc(disc);
+        }
+    }
+}
+
 void Connect4Scene::UpdateToppling(float deltaTime)
 {
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
@@ -1664,6 +1681,10 @@ void Connect4Scene::ClearDiscs()
 {
     // Nothing should still be simulated once the discs are back in the pool.
     StopDiscPhysics();
+
+    // Putting the discs away and putting the board back together are the same moment, so the
+    // frame and tray return here rather than at the end of the rerack.
+    ResetBoardParts();
 
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
