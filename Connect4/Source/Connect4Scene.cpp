@@ -590,6 +590,11 @@ bool Connect4Scene::Initialize()
         // Drive the loading screen as the board is built. Every few discs rather than every one,
         // since a frame costs far more than spawning a node and the point is to show progress, not
         // to render forty-two frames.
+        //
+        // The message overrides the engine's own "Loading...", which is what was on screen through
+        // the startup asset load just before this. The logo above it is not set here: it is named
+        // in Config.ini as LoadingScreenLogo, because the screen is already up before any of this
+        // project's code has run.
         if (renderer != nullptr && (i % 6) == 0)
         {
             const float progress = float(i) / float(C4::kCols * C4::kRows);

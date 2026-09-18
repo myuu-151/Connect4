@@ -12,10 +12,35 @@ a photogrammetry interior, a procedural sky, and physics used purely for feel.
 |---|---|
 | `Connect4/Source/Board.*` | Rules and AI. No engine dependency, so it compiles and self-tests on PC |
 | `Connect4/Source/Connect4Game.*` | Turn flow, input, and the hooks presentation attaches to |
+| `Connect4/Source/Connect4Scene.*` | The board in the world: cell positions, the drop, the rerack |
 | `Connect4/Assets` | Meshes, materials, textures, scenes |
 | `Connect4/Scripts` | Lua — currently the sky |
 | `external/` | Source downloads for the interiors, before conversion |
 | `docs/` | Notes |
+
+## Loading screen
+
+The screen itself belongs to the engine. What is on it comes from here, in two different ways,
+because the two are needed at different times.
+
+The **logo** is named in `Connect4/Config.ini`:
+
+    LoadingScreenLogo=T_Connect4Logo
+
+It has to be config rather than a call from game code: the engine puts the loading screen up
+during its own startup asset load, which finishes before any of this project's code runs. The
+texture is `Assets/UI/T_Connect4Logo.png`, padded to 512x256 -- GX addresses textures in powers
+of two, so the original 636x201 cannot be uploaded at all. Only the height is padded, so the logo
+still spans the full width and keeps its proportions.
+
+The **message** is passed from code, in `Connect4Scene.cpp`:
+
+    renderer->DrawLoadingFrame(progress, "Setting up the board...");
+
+The engine says "Loading..." during its own startup load. By the time the board is being built
+this project's code is running and can say what it is actually doing, so it overrides the text
+per call. Nothing project-specific lives in the engine: a game that sets neither gets a plain
+screen with the default message.
 
 ## Building
 
