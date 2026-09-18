@@ -126,6 +126,7 @@ private:
     bool AreDiscsAsleep() const;
     void UpdateToppling(float deltaTime);
     void UpdateDiscRetirement(float deltaTime);
+    void UpdateDiscRelease();
 
     Connect4Layout mLayout;
 
@@ -174,6 +175,9 @@ private:
         // for ever.
         float mLiveTime = 0.0f;
 
+        // Waiting its turn to be handed to the simulation. Only so many discs are live at once.
+        bool mAwaitingRelease = false;
+
         // Falling flat after being retired. A disc taken out of the simulation while balanced on
         // its edge would otherwise stay balanced there. Negative means it is not falling over.
         float mFlatT = -1.0f;
@@ -186,6 +190,7 @@ private:
     // Declared here rather than with the others above: it takes a Disc, which is defined just
     // above and not before.
     void RetireDisc(Disc& disc);
+    void ReleaseDisc(Disc& disc, uint32_t index);
 
     Disc mDiscs[C4::kCols * C4::kRows];
     uint32_t mNumDiscsUsed = 0;

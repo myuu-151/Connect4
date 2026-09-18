@@ -105,6 +105,16 @@ const float kDiscRetireTime = 0.5f;
 // The longest any disc is simulated for. A backstop against one that never settles.
 const float kDiscMaxLiveTime = 8.0f;
 
+// How many discs are simulated at once.
+//
+// Not a performance figure but a hard limit: Bullet allocates solver bodies and contact arrays for
+// every body in an island, and forty-two discs landing in one heap asks for more memory than there
+// is. It ran out inside the solver and wrote through a failed allocation.
+//
+// Releasing them a few at a time is also closer to what a real board does. It does not empty in one
+// instant -- the bottom row goes first and the rest follow it down.
+const uint32_t kMaxLiveDiscs = 10;
+
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
 
@@ -896,6 +906,7 @@ void Connect4Scene::Update(float deltaTime)
     // Outside the rerack's phases on purpose. The discs are left simulating once it has nominally
     // finished so the result can be watched for as long as anyone likes, which means stragglers
     // still have to be retired and laid down after the phases are over.
+    UpdateDiscRelease();
     UpdateDiscRetirement(deltaTime);
     UpdateToppling(deltaTime);
 }
@@ -1156,103 +1167,26 @@ void Connect4Scene::BuildPhysicsColliders()
 
 // Hand the discs over to Bullet. Up to this point they have been placed by hand -- they were held
 // in the grid while it lifted -- so their bodies are started from wherever they currently are.
+// Hand the discs to Bullet, a few at a time.
+//
+// They are queued here rather than all released at once. Bullet sizes its solver arrays by the
+// number of bodies in an island, and forty-two discs coming to rest in one heap is a single island
+// large enough to exhaust the machine -- it ran out of memory inside the solver and wrote through
+// the failed allocation. Keeping a bound on how many are live at any moment bounds that.
 void Connect4Scene::StartDiscPhysics()
 {
-    const float spacing = mLayout.GetRowSpacing();
     World* world = GetWorld(0);
-
-    uint32_t seed = 0x51ED2701u;
 
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
         Disc& disc = mDiscs[i];
 
-        if (!disc.mInUse || disc.mNode == nullptr)
+        if (disc.mInUse && disc.mNode != nullptr)
         {
-            continue;
+            disc.mAwaitingRelease = true;
+            disc.mSlowTime = 0.0f;
+            disc.mLiveTime = 0.0f;
         }
-
-        // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
-        // and in the model's own units, since the node's scale is applied to the shape on top.
-        btCollisionShape* shape = nullptr;
-        const float r = mDiscLocalRadius;
-        const float h = mDiscLocalHalfThickness;
-
-        switch (mDiscFaceAxis)
-        {
-        case 0:  shape = new btCylinderShapeX(btVector3(h, r, r)); break;
-        case 1:  shape = new btCylinderShape(btVector3(r, h, r));  break;
-        default: shape = new btCylinderShapeZ(btVector3(r, r, h)); break;
-        }
-
-        disc.mNode->SetCollisionShape(shape);
-
-        disc.mNode->SetMass(0.05f);
-        disc.mNode->SetFriction(0.5f);
-        disc.mNode->SetRestitution(0.35f);       // light plastic clatters rather than thuds
-        disc.mNode->SetLinearDamping(0.02f);
-
-        // Rolling friction and angular damping stay low on purpose. They are what slows a disc
-        // rolling away on its edge, which is the best thing the simulation does -- the spinning on
-        // the spot is a different rotation entirely and is dealt with below, so there is no reason
-        // to spend these on it and flatten the rolling in the process.
-        disc.mNode->SetRollingFriction(0.012f);
-        disc.mNode->SetAngularDamping(0.1f);
-
-        disc.mNode->EnableCollision(true);
-        disc.mNode->EnablePhysics(true);
-
-        // Start the body where the node already is, rather than wherever it was when the body was
-        // last created.
-        disc.mNode->FullSyncRigidBodyTransform();
-
-        // Less gravity than the world's.
-        //
-        // The world's is correct for a world measured in metres, and the discs were obeying it
-        // exactly -- which is the problem. The board is only centimetres across in world units, so
-        // a disc falls its own height in a few hundredths of a second and the whole rerack is over
-        // before the eye can follow it. It reads as something dense being dropped rather than a
-        // plastic counter tipping out of a rack.
-        //
-        // Slowing gravity for these bodies alone keeps the arcs and the tumbling and just gives
-        // them time to be seen. Nothing else in the scene is simulated, so there is nothing for
-        // this to be inconsistent with.
-        if (world != nullptr && world->GetDynamicsWorld() != nullptr && disc.mNode->GetRigidBody() != nullptr)
-        {
-            btRigidBody* body = disc.mNode->GetRigidBody();
-
-            const btVector3 worldGravity = world->GetDynamicsWorld()->getGravity();
-            body->setGravity(worldGravity * kDiscGravityScale);
-
-            // Spinning friction, which is the one that stops a disc turning on the spot.
-            //
-            // Rolling friction resists a disc rolling along on its edge; nothing in it opposes a
-            // rotation about the point of contact, so a disc that came to rest flat kept spinning
-            // where it lay with only damping to slow it, which took a very long time. This is the
-            // parameter for that case and it was simply never set.
-            body->setSpinningFriction(0.08f);
-
-            // Let them go to sleep. Bullet's defaults are sized for a world measured in metres,
-            // and the board is centimetres across, so a disc drifting far too slowly to see never
-            // came near the threshold and stayed awake indefinitely.
-            const float spacing = mLayout.GetRowSpacing();
-            body->setSleepingThresholds(spacing * 0.6f, 0.8f);
-        }
-
-        // The spread it was given when the tray was pulled, and a turn to go with it.
-        seed = seed * 1664525u + 1013904223u;
-        const float ax = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-        seed = seed * 1664525u + 1013904223u;
-        const float ay = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-        seed = seed * 1664525u + 1013904223u;
-        const float az = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
-
-        disc.mCheckPos = disc.mNode->GetWorldPosition();
-        disc.mSlowTime = 0.0f;
-        disc.mLiveTime = 0.0f;
-
-        disc.mNode->SetLinearVelocity(disc.mFrom);
-        disc.mNode->SetAngularVelocity(glm::vec3(ax, ay, az) * spacing * 18.0f);
     }
 
     // Fewer solver iterations while this is running.
@@ -1274,12 +1208,137 @@ void Connect4Scene::StartDiscPhysics()
     mDiscPhysicsRunning = true;
 }
 
+// Let go of the next few discs whenever there is room for them.
+//
+// Lowest first, so the board empties from the bottom the way a real one does, and so the discs
+// already on the table are the ones supporting whatever comes down next.
+void Connect4Scene::UpdateDiscRelease()
+{
+    if (!mDiscPhysicsRunning)
+    {
+        return;
+    }
+
+    uint32_t live = 0;
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        if (mDiscs[i].mInUse && mDiscs[i].mNode != nullptr && mDiscs[i].mNode->IsPhysicsEnabled())
+        {
+            live++;
+        }
+    }
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows && live < kMaxLiveDiscs; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (!disc.mAwaitingRelease || !disc.mInUse || disc.mNode == nullptr)
+        {
+            continue;
+        }
+
+        ReleaseDisc(disc, i);
+        live++;
+    }
+}
+
+void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
+{
+    World* world = GetWorld(0);
+    const float spacing = mLayout.GetRowSpacing();
+
+    disc.mAwaitingRelease = false;
+    uint32_t seed = 0x51ED2701u + index * 2654435761u;
+
+    // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
+    // and in the model's own units, since the node's scale is applied to the shape on top.
+    btCollisionShape* shape = nullptr;
+    const float r = mDiscLocalRadius;
+    const float h = mDiscLocalHalfThickness;
+
+    switch (mDiscFaceAxis)
+    {
+    case 0:  shape = new btCylinderShapeX(btVector3(h, r, r)); break;
+    case 1:  shape = new btCylinderShape(btVector3(r, h, r));  break;
+    default: shape = new btCylinderShapeZ(btVector3(r, r, h)); break;
+    }
+
+    disc.mNode->SetCollisionShape(shape);
+
+    disc.mNode->SetMass(0.05f);
+    disc.mNode->SetFriction(0.5f);
+    disc.mNode->SetRestitution(0.35f);       // light plastic clatters rather than thuds
+    disc.mNode->SetLinearDamping(0.02f);
+
+    // Rolling friction and angular damping stay low on purpose. They are what slows a disc
+    // rolling away on its edge, which is the best thing the simulation does -- the spinning on
+    // the spot is a different rotation entirely and is dealt with below, so there is no reason
+    // to spend these on it and flatten the rolling in the process.
+    disc.mNode->SetRollingFriction(0.012f);
+    disc.mNode->SetAngularDamping(0.1f);
+
+    disc.mNode->EnableCollision(true);
+    disc.mNode->EnablePhysics(true);
+
+    // Start the body where the node already is, rather than wherever it was when the body was
+    // last created.
+    disc.mNode->FullSyncRigidBodyTransform();
+
+    // Less gravity than the world's.
+    //
+    // The world's is correct for a world measured in metres, and the discs were obeying it
+    // exactly -- which is the problem. The board is only centimetres across in world units, so
+    // a disc falls its own height in a few hundredths of a second and the whole rerack is over
+    // before the eye can follow it. It reads as something dense being dropped rather than a
+    // plastic counter tipping out of a rack.
+    //
+    // Slowing gravity for these bodies alone keeps the arcs and the tumbling and just gives
+    // them time to be seen. Nothing else in the scene is simulated, so there is nothing for
+    // this to be inconsistent with.
+    if (world != nullptr && world->GetDynamicsWorld() != nullptr && disc.mNode->GetRigidBody() != nullptr)
+    {
+        btRigidBody* body = disc.mNode->GetRigidBody();
+
+        const btVector3 worldGravity = world->GetDynamicsWorld()->getGravity();
+        body->setGravity(worldGravity * kDiscGravityScale);
+
+        // Spinning friction, which is the one that stops a disc turning on the spot.
+        //
+        // Rolling friction resists a disc rolling along on its edge; nothing in it opposes a
+        // rotation about the point of contact, so a disc that came to rest flat kept spinning
+        // where it lay with only damping to slow it, which took a very long time. This is the
+        // parameter for that case and it was simply never set.
+        body->setSpinningFriction(0.08f);
+
+        // Let them go to sleep. Bullet's defaults are sized for a world measured in metres,
+        // and the board is centimetres across, so a disc drifting far too slowly to see never
+        // came near the threshold and stayed awake indefinitely.
+        body->setSleepingThresholds(spacing * 0.6f, 0.8f);
+    }
+
+    // The spread it was given when the tray was pulled, and a turn to go with it.
+    seed = seed * 1664525u + 1013904223u;
+    const float ax = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+    seed = seed * 1664525u + 1013904223u;
+    const float ay = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+    seed = seed * 1664525u + 1013904223u;
+    const float az = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+
+    disc.mCheckPos = disc.mNode->GetWorldPosition();
+    disc.mSlowTime = 0.0f;
+    disc.mLiveTime = 0.0f;
+
+    disc.mNode->SetLinearVelocity(disc.mFrom);
+    disc.mNode->SetAngularVelocity(glm::vec3(ax, ay, az) * spacing * 18.0f);
+}
+
 // Take a disc out of the simulation, and lay it down if it was left standing.
 //
-// Retiring alone was not enough: a disc balanced on its edge simply stayed balanced, which is not
-// something a disc does. Bullet is no longer moving it, so the last bit is done by hand -- tipped
-// the shortest way onto its face, and lowered by the difference between standing on an edge and
-// lying flat so it does not hang above whatever it is resting on.
+// Physics off, collision left on. Turning both off made a retired disc a ghost: it stopped being
+// simulated, which is the point, but it also stopped being something to land on, so every disc
+// that came down afterwards fell straight through it and came to rest inside it. A disc that has
+// settled is still there -- it just does not need moving any more.
 void Connect4Scene::RetireDisc(Disc& disc)
 {
     if (disc.mNode == nullptr)
@@ -1296,7 +1355,6 @@ void Connect4Scene::RetireDisc(Disc& disc)
     const float uprightness = glm::abs(normal.y);
 
     disc.mNode->EnablePhysics(false);
-    disc.mNode->EnableCollision(false);
 
     // Near enough flat already: leave it exactly where the simulation put it.
     if (uprightness > 0.85f)
@@ -1308,9 +1366,9 @@ void Connect4Scene::RetireDisc(Disc& disc)
     // over, every time. One resting on top of others can be propped at any angle it likes, and
     // those arrangements are the best thing the simulation produces.
     //
-    // So the question is not how tilted it is but whether there is anything under it. A disc on
-    // the table sits within about a radius of it however it is leaning; anything higher is on top
-    // of something else and is left alone.
+    // So the question is not how tilted it is but whether there is anything under it. A disc on the
+    // table sits within about a radius of it however it is leaning; anything higher is on top of
+    // something else and is left alone.
     const glm::vec3 position = disc.mNode->GetWorldPosition();
     const bool restingOnTable = (position.y < mTableY + mDiscRadius * 1.25f);
 
@@ -1332,25 +1390,15 @@ void Connect4Scene::RetireDisc(Disc& disc)
     disc.mFlatT = 0.0f;
 }
 
-// Advance any disc that is in the middle of falling over. Runs whatever the rerack is doing, since
-// a disc retired late is still on its way down when the rest have finished.
-// Retire each disc as it stops travelling, rather than waiting for all forty-two to be still at
+// Retire each disc as it stops travelling, rather than waiting for all of them to be still at
 // once.
 //
 // This does two jobs. A disc balanced on its edge will spin like a coin for as long as Bullet is
 // asked to keep simulating it -- the contact is effectively a point, so there is almost nothing to
 // slow it. Taking it out of the simulation ends that outright, and RetireDisc lays it down.
 //
-// And it is the cost: every retired disc is one fewer body in the broadphase and one fewer pile of
-// contacts for the solver, so the heaviest moment thins out steadily instead of staying at full
-// weight until the last disc happens to settle.
-//
-// The test is on travel, not on turning. A disc rolling away on its edge is turning fast and is
-// the best thing the simulation does, so it keeps its place until it actually stops going
-// anywhere.
-//
-// Runs every frame rather than only during the fall: the discs are left simulating after the
-// rerack has nominally finished, so that they can be watched, and stragglers still need retiring.
+// And it is the cost: a retired disc is one fewer body in the solver, which both keeps the frame
+// time down and makes room for the next disc waiting to be released.
 void Connect4Scene::UpdateDiscRetirement(float deltaTime)
 {
     if (!mDiscPhysicsRunning)
@@ -1358,7 +1406,7 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
         return;
     }
 
-    // How far a disc has to travel in kDiscRetireTime to count as still going somewhere.
+    // How far a disc has to travel between checks to count as still going somewhere.
     const float worthwhileTravel = mDiscRadius * 0.75f;
 
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
@@ -1389,13 +1437,10 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
 
         // Measured as distance covered, not as reported speed.
         //
-        // The velocity test this replaces kept being defeated by discs that were going nowhere in
-        // any meaningful sense but not holding still either: one spinning on its edge wobbles, and
-        // the wobble alone was enough to clear the threshold every frame and reset the timer. So a
-        // disc that was obviously stuck to look at never retired, at any frame rate.
-        //
-        // Where it actually is, compared with where it was a moment ago, does not care about any
-        // of that.
+        // A velocity test kept being defeated by discs going nowhere in any meaningful sense but
+        // not holding still either: one spinning on its edge wobbles, and the wobble alone cleared
+        // the threshold every frame and reset the timer. Where it actually is, compared with where
+        // it was a moment ago, does not care about that.
         const glm::vec3 now = disc.mNode->GetWorldPosition();
 
         if (glm::distance(now, disc.mCheckPos) < worthwhileTravel)
@@ -1410,6 +1455,8 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
     }
 }
 
+// Advance any disc that is in the middle of falling over. Runs whatever the rerack is doing, since
+// a disc retired late is still on its way down when the rest have finished.
 void Connect4Scene::UpdateToppling(float deltaTime)
 {
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
@@ -1433,9 +1480,13 @@ void Connect4Scene::UpdateToppling(float deltaTime)
 
 void Connect4Scene::StopDiscPhysics()
 {
+    // Every disc, not only the ones still being simulated. A retired disc has its physics off
+    // already but keeps its collision, so that later discs have something to land on; without
+    // clearing it here those colliders would outlive the rerack and sit invisibly on the table
+    // through the next game.
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
-        if (mDiscs[i].mNode != nullptr && mDiscs[i].mNode->IsPhysicsEnabled())
+        if (mDiscs[i].mNode != nullptr)
         {
             mDiscs[i].mNode->EnablePhysics(false);
             mDiscs[i].mNode->EnableCollision(false);
@@ -1464,6 +1515,12 @@ bool Connect4Scene::AreDiscsAsleep() const
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
         const Disc& disc = mDiscs[i];
+
+        // Still waiting to be let go: the rerack is certainly not finished.
+        if (disc.mAwaitingRelease)
+        {
+            return false;
+        }
 
         if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
         {
@@ -1749,6 +1806,7 @@ void Connect4Scene::ClearDiscs()
         mDiscs[i].mVelocity = glm::vec3(0.0f);
         mDiscs[i].mSlowTime = 0.0f;
         mDiscs[i].mFlatT = -1.0f;
+        mDiscs[i].mAwaitingRelease = false;
     }
 
     mNumDiscsUsed = 0;
