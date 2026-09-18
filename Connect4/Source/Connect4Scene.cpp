@@ -125,10 +125,16 @@ const float kDiscMaxLiveTime = 8.0f;
 // fail after one of forty-two succeeded. It depends on how badly the pile tangles, not on how many
 // discs are in it.
 //
-// The warm-up reserves what it can at startup, but it cannot reserve more than exists. Thirty is
-// below every failure seen so far, and the way to raise it is to free memory elsewhere rather than
-// to raise this number and hope.
-const uint32_t kMaxLiveDiscs = 30;
+// The whole board, so a rerack is always one drop.
+//
+// This is only safe with memory to spare: the solver's contact pool wants a single large contiguous
+// block when the pile is at its most tangled, and it is the allocation for that which fails. The
+// warm-up reserves what it can at startup, but it cannot reserve more than exists.
+//
+// If a full board starts crashing again, this is the number to lower -- but the real fix is to stop
+// large textures sitting in memory as RGBA8 when RGB5A3 holds them at half the size with their
+// alpha intact.
+const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
 
 // How many frames the startup warm-up runs for.
 // Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
