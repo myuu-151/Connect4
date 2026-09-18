@@ -123,7 +123,9 @@ const float kDiscMaxLiveTime = 8.0f;
 const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
 
 // How many frames the startup warm-up runs for.
-const int32_t kWarmUpFrames = 12;
+// Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
+// still in the air, touching nothing, when it is switched off again.
+const int32_t kWarmUpFrames = 45;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
@@ -702,11 +704,24 @@ bool Connect4Scene::Initialize()
                 continue;
             }
 
-            // Stacked in a column so they land on each other and form one island, which is the
-            // only arrangement that makes the solver reserve anything.
+            // Dropped into a tight cluster, not a neat column.
+            //
+            // A column gives forty-two bodies but only about forty-one contacts, and the array that
+            // runs out is not the one sized by bodies -- it is the contact constraint pool, which is
+            // sized by contact points. In a real heap every disc touches several others, so the
+            // warm-up has to make a heap rather than a stack or it reserves a fraction of what a
+            // rerack asks for.
+            //
+            // Three narrow columns within a disc's width of each other, so they collapse into each
+            // other on the way down and pile up properly.
+            const float across = mDiscRadius * 0.7f;
+            const glm::vec3 offset(((i % 3) - 1) * across,
+                                   mDiscRadius * 1.1f * float(i / 3),
+                                   (((i / 3) % 3) - 1) * across);
+
             disc.mInUse = true;
             disc.mFrom = glm::vec3(0.0f);
-            disc.mNode->SetWorldPosition(above + glm::vec3(0.0f, mDiscRadius * 2.2f * float(i), 0.0f));
+            disc.mNode->SetWorldPosition(above + offset);
             disc.mNode->SetVisible(false);
         }
 
