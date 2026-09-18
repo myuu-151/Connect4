@@ -255,16 +255,23 @@ bool Connect4Scene::Initialize()
         }
     }
 
-    // Spawned discs hang off the frame's parent, so they inherit the same placement as the board
-    // and move with it if it is repositioned.
-    mBoardRoot = mFrameNode->GetParent() ? mFrameNode->GetParent()->As<Node3D>() : nullptr;
-
-    if (mBoardRoot == nullptr)
+    // Spawned discs go beside the chip that is already in the scene, and copy its local scale and
+    // rotation. The two models are authored at very different sizes -- the frame is hundreds of
+    // units across and scaled right down, the chip is about a unit and scaled near 1 -- so a disc
+    // parented under the frame would inherit the frame's scale and come out far too small to see.
+    if (templateChip != nullptr)
     {
-        mBoardRoot = root->As<Node3D>();
+        mDiscParent = templateChip->GetParent() ? templateChip->GetParent()->As<Node3D>() : nullptr;
+        mDiscScale = templateChip->GetScale();
+        mDiscRotation = templateChip->GetRotationEuler();
     }
 
-    if (mBoardRoot == nullptr)
+    if (mDiscParent == nullptr)
+    {
+        mDiscParent = root->As<Node3D>();
+    }
+
+    if (mDiscParent == nullptr)
     {
         LogError("Connect4: no Node3D to parent discs to.");
         return false;
@@ -310,12 +317,12 @@ bool Connect4Scene::Initialize()
 
 StaticMesh3D* Connect4Scene::CreateDisc(const char* name)
 {
-    if (mBoardRoot == nullptr || mDiscMesh == nullptr)
+    if (mDiscParent == nullptr || mDiscMesh == nullptr)
     {
         return nullptr;
     }
 
-    StaticMesh3D* disc = mBoardRoot->CreateChild<StaticMesh3D>();
+    StaticMesh3D* disc = mDiscParent->CreateChild<StaticMesh3D>();
 
     if (disc == nullptr)
     {
@@ -324,6 +331,12 @@ StaticMesh3D* Connect4Scene::CreateDisc(const char* name)
 
     disc->SetName(name);
     disc->SetStaticMesh(mDiscMesh);
+
+    // Match the chip in the scene rather than defaulting to an identity transform, so the disc is
+    // the size and orientation the model was placed at.
+    disc->SetScale(mDiscScale);
+    disc->SetRotation(mDiscRotation);
+
     disc->SetVisible(false);
 
     return disc;
@@ -630,7 +643,11 @@ void Connect4Scene::ClearDiscs()
         if (mDiscs[i].mNode != nullptr)
         {
             mDiscs[i].mNode->SetVisible(false);
-            mDiscs[i].mNode->SetRotation(glm::vec3(0.0f));
+
+            // Back to the orientation the chip was placed at, not to identity: the rerack spins
+            // the discs, and resetting to zero would leave the next game's discs lying at whatever
+            // angle identity happens to be for this model.
+            mDiscs[i].mNode->SetRotation(mDiscRotation);
         }
 
         mDiscs[i].mInUse = false;

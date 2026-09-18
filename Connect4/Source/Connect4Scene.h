@@ -93,9 +93,17 @@ private:
 
     Connect4Layout mLayout;
 
-    Node3D* mBoardRoot = nullptr;        // parent for spawned discs
     StaticMesh3D* mFrameNode = nullptr;
     StaticMesh3D* mCursorDisc = nullptr;
+
+    // Spawned discs copy the chip already in the scene: same parent, same local scale and
+    // rotation. Parenting them anywhere else means inheriting that node's scale instead, and the
+    // frame and the chip are modelled at wildly different sizes -- the frame mesh is hundreds of
+    // units across and scaled down to fit, the chip is about one unit and scaled roughly 1. A disc
+    // parented under the frame comes out around a hundred times too small to see.
+    Node3D* mDiscParent = nullptr;
+    glm::vec3 mDiscScale = glm::vec3(1.0f);
+    glm::vec3 mDiscRotation = glm::vec3(0.0f);
 
     StaticMesh* mDiscMesh = nullptr;
     Material* mRedMaterial = nullptr;
