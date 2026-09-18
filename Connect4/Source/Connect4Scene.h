@@ -124,6 +124,7 @@ private:
     void StartDiscPhysics();
     void StopDiscPhysics();
     bool AreDiscsAsleep() const;
+    void UpdateToppling(float deltaTime);
 
     Connect4Layout mLayout;
 
@@ -167,7 +168,19 @@ private:
         // out of the simulation, which both ends anything it is still doing on the spot and stops
         // it costing the solver anything.
         float mSlowTime = 0.0f;
+
+        // Falling flat after being retired. A disc taken out of the simulation while balanced on
+        // its edge would otherwise stay balanced there. Negative means it is not falling over.
+        float mFlatT = -1.0f;
+        glm::quat mRotFrom = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::quat mRotTo = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::vec3 mPosFrom = glm::vec3(0.0f);
+        glm::vec3 mPosTo = glm::vec3(0.0f);
     };
+
+    // Declared here rather than with the others above: it takes a Disc, which is defined just
+    // above and not before.
+    void RetireDisc(Disc& disc);
 
     Disc mDiscs[C4::kCols * C4::kRows];
     uint32_t mNumDiscsUsed = 0;

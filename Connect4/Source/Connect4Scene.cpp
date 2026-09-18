@@ -102,8 +102,41 @@ const float kDiscGravityScale = 0.38f;
 // How long a disc has to be going nowhere before it is taken out of the simulation.
 const float kDiscRetireTime = 0.45f;
 
+// How long a retired disc takes to fall flat.
+const float kRetireToppleTime = 0.28f;
+
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
+
+// Where a disc ends up once it has fallen over: face up, reached by the shortest tip from wherever
+// it is. Taking the shortest arc is what makes it look like falling rather than being turned --
+// it follows whichever way the disc is already leaning.
+glm::quat ToppleRotation(const glm::quat& current, int32_t faceAxis)
+{
+    glm::vec3 localNormal(0.0f);
+    localNormal[glm::clamp(faceAxis, 0, 2)] = 1.0f;
+
+    glm::vec3 normal = current * localNormal;
+
+    const float normalLen = glm::length(normal);
+    normal = (normalLen > 0.0001f) ? (normal / normalLen) : glm::vec3(0.0f, 1.0f, 0.0f);
+
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+
+    // Either face can end up on top, so tip towards whichever is nearer.
+    const glm::vec3 target = (glm::dot(normal, up) < 0.0f) ? -up : up;
+
+    glm::vec3 axis = glm::cross(normal, target);
+
+    if (glm::length(axis) < 0.001f)
+    {
+        return current;   // already flat
+    }
+
+    const float angle = acosf(glm::clamp(glm::dot(normal, target), -1.0f, 1.0f));
+
+    return glm::angleAxis(angle, glm::normalize(axis)) * current;
+}
 
 // Smoothstep, for the cursor slide.
 float EaseInOut(float t)
@@ -867,6 +900,8 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
     mRerackTime += deltaTime;
 
+    UpdateToppling(deltaTime);
+
     switch (mRerackPhase)
     {
     case RerackPhase::Lift:
@@ -981,8 +1016,7 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
                 if (disc.mSlowTime > kDiscRetireTime)
                 {
-                    disc.mNode->EnablePhysics(false);
-                    disc.mNode->EnableCollision(false);
+                    RetireDisc(disc);
                 }
             }
         }
@@ -1265,6 +1299,72 @@ void Connect4Scene::StartDiscPhysics()
     }
 
     mDiscPhysicsRunning = true;
+}
+
+// Take a disc out of the simulation, and lay it down if it was left standing.
+//
+// Retiring alone was not enough: a disc balanced on its edge simply stayed balanced, which is not
+// something a disc does. Bullet is no longer moving it, so the last bit is done by hand -- tipped
+// the shortest way onto its face, and lowered by the difference between standing on an edge and
+// lying flat so it does not hang above whatever it is resting on.
+void Connect4Scene::RetireDisc(Disc& disc)
+{
+    if (disc.mNode == nullptr)
+    {
+        return;
+    }
+
+    const glm::quat current = disc.mNode->GetWorldRotationQuat();
+
+    glm::vec3 localNormal(0.0f);
+    localNormal[glm::clamp(mDiscFaceAxis, 0, 2)] = 1.0f;
+
+    const glm::vec3 normal = current * localNormal;
+    const float uprightness = glm::abs(normal.y);
+
+    disc.mNode->EnablePhysics(false);
+    disc.mNode->EnableCollision(false);
+
+    // Near enough flat already: leave it exactly where the simulation put it.
+    if (uprightness > 0.9f)
+    {
+        return;
+    }
+
+    disc.mRotFrom = current;
+    disc.mRotTo = ToppleRotation(current, mDiscFaceAxis);
+
+    disc.mPosFrom = disc.mNode->GetWorldPosition();
+    disc.mPosTo = disc.mPosFrom;
+
+    // How far it has to come down is how far over it has to go: a disc on its edge is a radius up,
+    // flat it is half its thickness.
+    disc.mPosTo.y -= (mDiscRadius - mDiscHalfThickness) * (1.0f - uprightness);
+
+    disc.mFlatT = 0.0f;
+}
+
+// Advance any disc that is in the middle of falling over. Runs whatever the rerack is doing, since
+// a disc retired late is still on its way down when the rest have finished.
+void Connect4Scene::UpdateToppling(float deltaTime)
+{
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (!disc.mInUse || disc.mNode == nullptr || disc.mFlatT < 0.0f || disc.mFlatT >= 1.0f)
+        {
+            continue;
+        }
+
+        disc.mFlatT = glm::min(disc.mFlatT + deltaTime / kRetireToppleTime, 1.0f);
+
+        // Accelerating, because something falling over starts slowly and arrives fast.
+        const float fall = disc.mFlatT * disc.mFlatT;
+
+        disc.mNode->SetWorldRotation(glm::slerp(disc.mRotFrom, disc.mRotTo, fall));
+        disc.mNode->SetWorldPosition(glm::mix(disc.mPosFrom, disc.mPosTo, fall));
+    }
 }
 
 void Connect4Scene::StopDiscPhysics()
@@ -1551,6 +1651,7 @@ void Connect4Scene::BeginRerack()
         // What remains is a nudge to break the symmetry, so they do not fall in perfect lockstep
         // out of a perfectly regular grid.
         disc.mSlowTime = 0.0f;
+        disc.mFlatT = -1.0f;
 
         disc.mFrom = mSpreadAxis * (rx * spacing * 0.35f)
                    + mSpillAxis * (spacing * 0.1f)
@@ -1578,6 +1679,8 @@ void Connect4Scene::ClearDiscs()
 
         mDiscs[i].mInUse = false;
         mDiscs[i].mVelocity = glm::vec3(0.0f);
+        mDiscs[i].mSlowTime = 0.0f;
+        mDiscs[i].mFlatT = -1.0f;
     }
 
     mNumDiscsUsed = 0;
