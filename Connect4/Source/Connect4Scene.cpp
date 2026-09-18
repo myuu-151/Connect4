@@ -1236,6 +1236,22 @@ void Connect4Scene::StartDiscPhysics()
         disc.mNode->SetAngularVelocity(glm::vec3(ax, ay, az) * spacing * 18.0f);
     }
 
+    // Fewer solver iterations while this is running.
+    //
+    // Forty-two discs landing on each other is the heaviest moment in the game, and the solver is
+    // where the time goes: it is the part that has to resolve a pile of stacked contacts, and its
+    // cost is roughly linear in the iteration count. Ten is the default and is aimed at simulations
+    // whose results matter; nothing here depends on the discs settling to any particular
+    // arrangement, so a looser solve costs nothing that can be seen and buys back most of the
+    // frame time.
+    if (world != nullptr && world->GetDynamicsWorld() != nullptr)
+    {
+        btContactSolverInfo& solverInfo = world->GetDynamicsWorld()->getSolverInfo();
+
+        mSavedSolverIterations = solverInfo.m_numIterations;
+        solverInfo.m_numIterations = 4;
+    }
+
     mDiscPhysicsRunning = true;
 }
 
@@ -1248,6 +1264,15 @@ void Connect4Scene::StopDiscPhysics()
             mDiscs[i].mNode->EnablePhysics(false);
             mDiscs[i].mNode->EnableCollision(false);
         }
+    }
+
+    // Back to whatever the rest of the game expects.
+    World* world = GetWorld(0);
+
+    if (mSavedSolverIterations > 0 && world != nullptr && world->GetDynamicsWorld() != nullptr)
+    {
+        world->GetDynamicsWorld()->getSolverInfo().m_numIterations = mSavedSolverIterations;
+        mSavedSolverIterations = 0;
     }
 
     mDiscPhysicsRunning = false;
