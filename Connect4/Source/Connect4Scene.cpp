@@ -209,8 +209,7 @@ bool Connect4Layout::Build(StaticMesh3D* frameNode, Node3D* depthSample)
 
     mBuilt = true;
 
-    OctLog("Connect4: layout built, col spacing %.3f, row spacing %.3f",
-           mColSpacing, mRowSpacing);
+    LogDebug("C4: layout col %.3f row %.3f", mColSpacing, mRowSpacing);
 
     return true;
 }
@@ -349,7 +348,13 @@ bool Connect4Scene::Initialize()
 
     // The table top is the underside of the stand -- it is what the board is standing on, so it is
     // exactly the height a disc should come to rest at.
-    mTableY = mLayout.GetStillPoint(0, 0).y;
+    //
+    // The fallback has to be BELOW the board. Falling back to the bottom row meant a disc dropped a
+    // few centimetres, landed back inside the frame it was supposed to be emptying out of, and
+    // stopped there looking stuck, which is indistinguishable from the fall being broken. Start
+    // from a height that is clearly under the board and let the stand refine it.
+    const float bottomRowY = mLayout.GetStillPoint(0, 0).y;
+    mTableY = bottomRowY - mLayout.GetRowSpacing() * 1.5f;
 
     if (mStandNode != nullptr)
     {
@@ -376,7 +381,19 @@ bool Connect4Scene::Initialize()
                 lowest = glm::min(lowest, glm::vec3(standToWorld * glm::vec4(corner, 1.0f)).y);
             }
 
-            mTableY = lowest;
+            // Only trust it if it is actually below the board. A stand that measures level with
+            // or above the bottom row means something is not what it was assumed to be -- the
+            // wrong node found, or a mesh in an unexpected space -- and using it would wedge every
+            // disc inside the frame.
+            if (lowest < bottomRowY)
+            {
+                mTableY = lowest;
+            }
+            else
+            {
+                LogWarning("Connect4: stand measured at or above the board (%.3f vs %.3f); "
+                           "using a fallback table height.", lowest, bottomRowY);
+            }
         }
     }
 
@@ -393,8 +410,8 @@ bool Connect4Scene::Initialize()
         }
     }
 
-    OctLog("Connect4: lift %.3f, tray pull %.3f, table y %.3f",
-           mLiftDistance, mTrayDistance, mTableY);
+    LogDebug("C4: lift %.2f pull %.2f tableY %.2f rowY0 %.2f discOff %.3f",
+             mLiftDistance, mTrayDistance, mTableY, bottomRowY, mDiscRestOffset);
 
     // Prefer a real yellow chip if one has been put in the scene, so its own texture is used
     // rather than an approximation of it.
@@ -928,7 +945,9 @@ void Connect4Scene::BeginRerack()
         {
             const glm::vec3 toCamera = camera->GetWorldPosition() - mTrayNode->GetWorldPosition();
 
-            if (glm::dot(mTrayAxis, toCamera) < 0.0f)
+            // Away from the camera: the tray goes back under the board rather than out towards
+            // the player.
+            if (glm::dot(mTrayAxis, toCamera) > 0.0f)
             {
                 mTrayAxis = -mTrayAxis;
             }
