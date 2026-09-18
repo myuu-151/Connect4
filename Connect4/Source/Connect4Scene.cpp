@@ -503,7 +503,11 @@ bool Connect4Scene::Initialize()
     // whole scene, so the game still runs while the audio is being put together.
     mSlotBeginSound = LoadAsset<SoundWave>("slot_begin");
     mSlotEndSound = LoadAsset<SoundWave>("slot_end");
-    mRerackSound = LoadAsset<SoundWave>("rerack");
+
+    // The rerack sound is deliberately not loaded. It is the largest of the three and decoding it
+    // was what ran the machine out of memory, and unlike the other two it is not needed on every
+    // move -- so it is the cheapest thing to drop while the memory budget is sorted out.
+    mRerackSound = nullptr;
 
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
              mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
@@ -1311,7 +1315,6 @@ void Connect4Scene::BeginRerack()
     mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
 
-    PlayRerackSound();
     HideCursorDisc();
 
     // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
