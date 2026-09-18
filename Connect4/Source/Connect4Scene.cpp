@@ -97,7 +97,7 @@ const float kPullDepthMul = 2.2f;
 // How much of the world's gravity the discs feel. Below 1 because the board is only centimetres
 // across in world units: at full gravity a disc falls its own height in a few hundredths of a
 // second, which is correct and unwatchable.
-const float kDiscGravityScale = 0.55f;
+const float kDiscGravityScale = 0.38f;
 
 const glm::vec4 kRedTint = glm::vec4(1.00f, 1.00f, 1.00f, 1.0f);   // the mesh is already red
 const glm::vec4 kYellowTint = glm::vec4(2.05f, 1.62f, 0.22f, 1.0f);
@@ -1042,10 +1042,17 @@ void Connect4Scene::BuildPhysicsColliders()
         return box;
     };
 
-    // The table. Sized from the board rather than from the room, since the room's own collision is
-    // not something this can rely on: wide enough that a disc cannot skid off the end of it, and
-    // thick enough that nothing can tunnel through at the speeds involved.
-    const float tableHalfWidth = mLayout.GetColSpacing() * 12.0f;
+    // The table top. Sized to roughly the real table, not to something comfortably enormous: the
+    // first version was twenty-four columns across, so there was invisible floor everywhere and a
+    // disc could never reach an edge to fall off one. Discs going over the side is half the point
+    // of tipping a board out.
+    //
+    // Measured as a multiple of the board, since the table belongs to the room's mesh and cannot
+    // be picked out of it. These are the two numbers to nudge if discs stop short of the real edge
+    // or hang in the air past it.
+    const float boardWidth = mLayout.GetColSpacing() * float(C4::kCols - 1);
+    const float tableWidth = boardWidth * 1.45f;
+    const float tableDepth = boardWidth * 0.80f;
     const float tableThickness = mDiscRadius * 8.0f;
 
     const glm::vec3 boardCenter = mLayout.GetStillPoint(C4::kCols / 2, 0);
@@ -1053,7 +1060,14 @@ void Connect4Scene::BuildPhysicsColliders()
     mGroundCollider = makeStaticBox(
         "RerackGround",
         glm::vec3(boardCenter.x, mTableY - tableThickness * 0.5f, boardCenter.z),
-        glm::vec3(tableHalfWidth * 2.0f, tableThickness, tableHalfWidth * 2.0f));
+        glm::vec3(tableWidth, tableThickness, tableDepth));
+
+    // Well below, so a disc that goes over the edge lands somewhere instead of falling for ever.
+    // Without it nothing ever comes to rest and the rerack only ends on its timeout.
+    makeStaticBox(
+        "RerackFloor",
+        glm::vec3(boardCenter.x, mTableY - boardWidth * 1.2f, boardCenter.z),
+        glm::vec3(boardWidth * 8.0f, tableThickness, boardWidth * 8.0f));
 
     // The feet, already measured for their boxes.
     for (uint32_t i = 0; i < mNumObstacles && i < 2; ++i)
