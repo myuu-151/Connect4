@@ -117,10 +117,18 @@ const float kDiscMaxLiveTime = 8.0f;
 // practice the whole board goes at once and the queue never comes into it. Only a draw, or very
 // nearly one, releases in two waves.
 //
-// With the solver warmed up at startup this is the whole board, which is what a rerack should be.
-// It is kept as a limit rather than removed because it is the thing to lower if the warm-up ever
-// stops covering the case.
-const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
+// How many discs are simulated at once.
+//
+// A memory limit, not a performance one. The solver's contact constraint pool is sized by how many
+// contact points exist at that instant, and a heap of discs asks for a single large contiguous
+// block that this machine does not reliably have -- which is why a rerack of thirty-nine could
+// fail after one of forty-two succeeded. It depends on how badly the pile tangles, not on how many
+// discs are in it.
+//
+// The warm-up reserves what it can at startup, but it cannot reserve more than exists. Thirty is
+// below every failure seen so far, and the way to raise it is to free memory elsewhere rather than
+// to raise this number and hope.
+const uint32_t kMaxLiveDiscs = 30;
 
 // How many frames the startup warm-up runs for.
 // Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
@@ -704,16 +712,15 @@ bool Connect4Scene::Initialize()
                 continue;
             }
 
-            // Dropped into a tight cluster, not a neat column.
+            // A plausible heap, not a manufactured worst case.
             //
-            // A column gives forty-two bodies but only about forty-one contacts, and the array that
-            // runs out is not the one sized by bodies -- it is the contact constraint pool, which is
-            // sized by contact points. In a real heap every disc touches several others, so the
-            // warm-up has to make a heap rather than a stack or it reserves a fraction of what a
-            // rerack asks for.
+            // An earlier version packed them deliberately overlapping to force the solver to
+            // reserve for the worst tangle imaginable. It did exactly that, and asked for more
+            // memory than the machine has -- it crashed during the warm-up itself, having made the
+            // problem it was meant to solve twice as large.
             //
-            // Three narrow columns within a disc's width of each other, so they collapse into each
-            // other on the way down and pile up properly.
+            // Three narrow columns: they collapse into each other on the way down and settle into
+            // something like the pile a rerack makes, which is what needs to fit.
             const float across = mDiscRadius * 0.7f;
             const glm::vec3 offset(((i % 3) - 1) * across,
                                    mDiscRadius * 1.1f * float(i / 3),
@@ -873,6 +880,11 @@ void Connect4Scene::BeginDrop(const C4::Move& move, C4::Cell who)
 
     disc.mNode->SetMaterialOverride(GetDiscMaterial(who));
     disc.mNode->SetWorldPosition(disc.mFrom);
+
+    // Squarely in its slot, whatever the disc was doing last time it was used. Discs come back from
+    // a rerack at every angle, and one reused without this would drop into the board turned.
+    disc.mNode->SetRotation(mDiscRotation);
+
     disc.mNode->SetVisible(true);
 
     // Time the fall from the distance, so a disc into a deep column takes longer than one landing
@@ -1331,6 +1343,11 @@ void Connect4Scene::WarmUpSolver()
             disc.mNode->EnablePhysics(false);
             disc.mNode->EnableCollision(false);
             disc.mNode->SetVisible(false);
+
+            // Back to the orientation the chip was placed at. The warm-up flings them about, and
+            // without this they return to the pool holding whatever angle they were thrown into --
+            // so the first discs of the game appeared in their slots tilted.
+            disc.mNode->SetRotation(mDiscRotation);
         }
 
         disc.mInUse = false;
