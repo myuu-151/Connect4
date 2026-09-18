@@ -436,13 +436,37 @@ bool Connect4Scene::Initialize()
 
     // A disc resting on the table sits half its thickness above it. The thickness is the smallest
     // of the chip's dimensions, whichever axis the model happens to use for it.
+    //
+    // Measured through the chip's world transform, not by multiplying the mesh by the node's own
+    // scale. The node's scale is relative to its parent, and that parent is scaled to about a
+    // hundredth here, so using it gave a disc a hundred times too thick -- which put the resting
+    // height a good fraction of the board above the table. Discs never fell out: they were snapped
+    // straight back up to that height as soon as they dropped to it.
+    if (templateChip != nullptr)
     {
         glm::vec3 discMin(0.0f);
         glm::vec3 discMax(0.0f);
 
         if (MeasureMeshBounds(mDiscMesh, discMin, discMax))
         {
-            const glm::vec3 discSize = (discMax - discMin) * glm::abs(mDiscScale);
+            const glm::mat4& chipToWorld = templateChip->GetTransform();
+
+            glm::vec3 worldMin(1e9f);
+            glm::vec3 worldMax(-1e9f);
+
+            for (int c = 0; c < 8; ++c)
+            {
+                const glm::vec3 corner(
+                    (c & 1) ? discMax.x : discMin.x,
+                    (c & 2) ? discMax.y : discMin.y,
+                    (c & 4) ? discMax.z : discMin.z);
+
+                const glm::vec3 w = glm::vec3(chipToWorld * glm::vec4(corner, 1.0f));
+                worldMin = glm::min(worldMin, w);
+                worldMax = glm::max(worldMax, w);
+            }
+
+            const glm::vec3 discSize = worldMax - worldMin;
             mDiscRestOffset = glm::min(glm::min(discSize.x, discSize.y), discSize.z) * 0.5f;
         }
     }
