@@ -99,8 +99,11 @@ const float kPullDepthMul = 2.2f;
 // second, which is correct and unwatchable.
 const float kDiscGravityScale = 0.38f;
 
-// How long a disc has to be going nowhere before it is taken out of the simulation.
-const float kDiscRetireTime = 0.45f;
+// How long between checks of whether a disc has gone anywhere.
+const float kDiscRetireTime = 0.5f;
+
+// The longest any disc is simulated for. A backstop against one that never settles.
+const float kDiscMaxLiveTime = 8.0f;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
@@ -1244,6 +1247,10 @@ void Connect4Scene::StartDiscPhysics()
         seed = seed * 1664525u + 1013904223u;
         const float az = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
 
+        disc.mCheckPos = disc.mNode->GetWorldPosition();
+        disc.mSlowTime = 0.0f;
+        disc.mLiveTime = 0.0f;
+
         disc.mNode->SetLinearVelocity(disc.mFrom);
         disc.mNode->SetAngularVelocity(glm::vec3(ax, ay, az) * spacing * 18.0f);
     }
@@ -1291,8 +1298,15 @@ void Connect4Scene::RetireDisc(Disc& disc)
     disc.mNode->EnablePhysics(false);
     disc.mNode->EnableCollision(false);
 
-    // Near enough flat already: leave it exactly where the simulation put it.
-    if (uprightness > 0.9f)
+    // Only a disc actually standing on its edge is laid down.
+    //
+    // This used to lay down anything that was not nearly flat, which meant a disc leaning on top of
+    // another -- a perfectly good resting pose, and one the simulation produced on purpose -- was
+    // rotated flat and lowered for no reason. It read as the disc sliding sideways by itself.
+    //
+    // A disc on its edge has its face pointing sideways, so this is small for exactly the case
+    // that needs correcting and leaves every settled arrangement alone.
+    if (uprightness > 0.35f)
     {
         return;
     }
@@ -1336,7 +1350,8 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
         return;
     }
 
-    const float goingNowhere = mLayout.GetRowSpacing() * 0.35f;
+    // How far a disc has to travel in kDiscRetireTime to count as still going somewhere.
+    const float worthwhileTravel = mDiscRadius * 0.75f;
 
     for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
     {
@@ -1347,18 +1362,42 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
             continue;
         }
 
-        if (glm::length(disc.mNode->GetLinearVelocity()) < goingNowhere)
+        disc.mSlowTime += deltaTime;
+        disc.mLiveTime += deltaTime;
+
+        // Anything still going after this long is not going to settle. A disc spinning on its edge
+        // can keep itself alive indefinitely, and there is no arrangement of friction and damping
+        // that reliably stops it -- so it is stopped by the clock.
+        if (disc.mLiveTime > kDiscMaxLiveTime)
         {
-            disc.mSlowTime += deltaTime;
+            RetireDisc(disc);
+            continue;
+        }
+
+        if (disc.mSlowTime < kDiscRetireTime)
+        {
+            continue;
+        }
+
+        // Measured as distance covered, not as reported speed.
+        //
+        // The velocity test this replaces kept being defeated by discs that were going nowhere in
+        // any meaningful sense but not holding still either: one spinning on its edge wobbles, and
+        // the wobble alone was enough to clear the threshold every frame and reset the timer. So a
+        // disc that was obviously stuck to look at never retired, at any frame rate.
+        //
+        // Where it actually is, compared with where it was a moment ago, does not care about any
+        // of that.
+        const glm::vec3 now = disc.mNode->GetWorldPosition();
+
+        if (glm::distance(now, disc.mCheckPos) < worthwhileTravel)
+        {
+            RetireDisc(disc);
         }
         else
         {
+            disc.mCheckPos = now;
             disc.mSlowTime = 0.0f;
-        }
-
-        if (disc.mSlowTime > kDiscRetireTime)
-        {
-            RetireDisc(disc);
         }
     }
 }

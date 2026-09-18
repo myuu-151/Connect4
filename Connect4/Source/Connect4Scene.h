@@ -165,10 +165,14 @@ private:
 
         bool mInUse = false;
 
-        // Rerack: how long this disc has been going nowhere. Once that is long enough it is taken
-        // out of the simulation, which both ends anything it is still doing on the spot and stops
-        // it costing the solver anything.
+        // Rerack: where the disc was when it was last checked, and how long ago that was. Whether
+        // it has gone anywhere since is measured from these rather than from its velocity.
+        glm::vec3 mCheckPos = glm::vec3(0.0f);
         float mSlowTime = 0.0f;
+
+        // How long it has been simulated for, so one that will not settle is not left spinning
+        // for ever.
+        float mLiveTime = 0.0f;
 
         // Falling flat after being retired. A disc taken out of the simulation while balanced on
         // its edge would otherwise stay balanced there. Negative means it is not falling over.
