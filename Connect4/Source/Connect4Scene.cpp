@@ -9,6 +9,7 @@
 #include "Nodes/Node.h"
 #include "Nodes/3D/Node3d.h"
 #include "Nodes/3D/StaticMesh3d.h"
+#include "Nodes/3D/Camera3d.h"
 
 #include <math.h>
 
@@ -79,9 +80,10 @@ const float kSettleTime = 1.10f;       // how long they are left lying on the ta
 // clears the stand and the discs have somewhere to fall.
 const float kLiftFrac = 0.42f;
 
-// How far the tray slides out, as a fraction of its own length. Just short of all the way, so it
-// still reads as part of the board rather than a piece that came off.
-const float kPullFrac = 0.85f;
+// How far the tray is pulled, as a multiple of the board's thickness. The tray comes out towards
+// the player rather than sideways, so the distance that matters is how deep the board is: enough
+// to be clearly out from under the slots, not so far it looks detached.
+const float kPullDepthMul = 2.2f;
 
 const float kRerackGravity = 20.0f;    // row-spacings per second squared
 const float kDiscRestitution = 0.32f;  // how much of the fall is given back as a bounce
@@ -320,22 +322,24 @@ bool Connect4Scene::Initialize()
         }
     }
 
+    // The tray is pulled out towards the player, so it travels along the board's facing direction.
+    // The distance is the board's own thickness: whatever the model is scaled to, that is the depth
+    // the tray has to clear.
     if (mTrayNode != nullptr)
     {
-        StaticMesh3D* trayMesh = mTrayNode->As<StaticMesh3D>();
-        const glm::mat4& trayToWorld = mTrayNode->GetTransform();
+        const glm::mat4& frameToWorld = mFrameNode->GetTransform();
 
-        mTrayAxis = glm::normalize(glm::vec3(trayToWorld * glm::vec4(1, 0, 0, 0)));
+        mTrayAxis = glm::normalize(glm::vec3(frameToWorld * glm::vec4(0, 0, 1, 0)));
 
-        glm::vec3 trayMin(0.0f);
-        glm::vec3 trayMax(0.0f);
+        glm::vec3 frameMin(0.0f);
+        glm::vec3 frameMax(0.0f);
 
-        if (trayMesh != nullptr && MeasureMeshBounds(trayMesh->GetStaticMesh(), trayMin, trayMax))
+        if (MeasureMeshBounds(mFrameNode->GetStaticMesh(), frameMin, frameMax))
         {
-            const glm::vec3 a = glm::vec3(trayToWorld * glm::vec4(trayMin.x, trayMin.y, trayMin.z, 1.0f));
-            const glm::vec3 b = glm::vec3(trayToWorld * glm::vec4(trayMax.x, trayMin.y, trayMin.z, 1.0f));
+            const glm::vec3 front = glm::vec3(frameToWorld * glm::vec4(frameMin.x, frameMin.y, frameMin.z, 1.0f));
+            const glm::vec3 back = glm::vec3(frameToWorld * glm::vec4(frameMin.x, frameMin.y, frameMax.z, 1.0f));
 
-            mTrayDistance = glm::length(b - a) * kPullFrac;
+            mTrayDistance = glm::length(back - front) * kPullDepthMul;
         }
     }
 
@@ -906,6 +910,26 @@ void Connect4Scene::BeginRerack()
     mRerackTime = 0.0f;
 
     HideCursorDisc();
+
+    // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
+    // which of its two ends is the front depends on how the board was rotated in the editor -- so
+    // resolve it against the camera rather than guessing, and the tray comes towards the player
+    // however the board has been placed.
+    if (mTrayNode != nullptr)
+    {
+        World* world = GetWorld(0);
+        Camera3D* camera = world ? world->GetActiveCamera() : nullptr;
+
+        if (camera != nullptr)
+        {
+            const glm::vec3 toCamera = camera->GetWorldPosition() - mTrayNode->GetWorldPosition();
+
+            if (glm::dot(mTrayAxis, toCamera) < 0.0f)
+            {
+                mTrayAxis = -mTrayAxis;
+            }
+        }
+    }
 
     uint32_t seed = 0x9E3779B9u;
 
