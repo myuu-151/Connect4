@@ -1051,12 +1051,19 @@ void Connect4Scene::UpdateRerack(float deltaTime)
 
             disc.mNode->SetWorldPosition(pos);
 
-            // Tumble only once it is out of the board. Spinning while still between the slats made
+            // Tumble only once it is out of the board. Turning while still between the slats made
             // it look as though the frame were not there at all.
+            //
+            // About its own axis, as a rotation applied to whatever orientation it already has,
+            // so it leans further the longer it falls and meets the table at an angle. Adding to
+            // one euler component instead spun it in place and it arrived dead upright, which is
+            // what made the landing look like a flick rather than a fall.
             if (disc.mCleared && disc.mFlatT < 0.0f)
             {
-                disc.mNode->SetRotation(disc.mNode->GetRotationEuler() +
-                                        glm::vec3(0.0f, 0.0f, disc.mSpin * deltaTime));
+                const glm::quat turn = glm::angleAxis(glm::radians(disc.mSpin * deltaTime),
+                                                      disc.mTumbleAxis);
+
+                disc.mNode->SetWorldRotation(turn * disc.mNode->GetWorldRotationQuat());
             }
 
             if (disc.mFlatT >= 0.0f && disc.mFlatT < 1.0f)
@@ -1441,6 +1448,10 @@ void Connect4Scene::BeginRerack()
         const float rz = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
         seed = seed * 1664525u + 1013904223u;
         const float rs = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+        seed = seed * 1664525u + 1013904223u;
+        const float ra = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
+        seed = seed * 1664525u + 1013904223u;
+        const float rb = ((seed >> 16) & 0xFF) / 255.0f - 0.5f;
 
         const float spacing = mLayout.GetRowSpacing();
 
@@ -1464,7 +1475,16 @@ void Connect4Scene::BeginRerack()
                    + mSpreadAxis * (rx * spacing * 4.5f)
                    + glm::vec3(0.0f, 0.0f, rz * spacing * 0.6f);
 
-        disc.mSpin = rs * 540.0f;
+        // Mostly horizontal, so the disc goes over end over end rather than spinning flat like a
+        // coin on a table. The vertical part is small and only keeps them from all tumbling the
+        // same way.
+        glm::vec3 axis(ra, rb * 0.25f, rs);
+
+        disc.mTumbleAxis = (glm::length(axis) > 0.01f)
+                         ? glm::normalize(axis)
+                         : glm::vec3(1.0f, 0.0f, 0.0f);
+
+        disc.mSpin = 160.0f + glm::abs(rs) * 340.0f;
     }
 }
 
@@ -1485,6 +1505,7 @@ void Connect4Scene::ClearDiscs()
         mDiscs[i].mInUse = false;
         mDiscs[i].mVelocity = glm::vec3(0.0f);
         mDiscs[i].mSpin = 0.0f;
+        mDiscs[i].mTumbleAxis = glm::vec3(1.0f, 0.0f, 0.0f);
         mDiscs[i].mCleared = false;
         mDiscs[i].mFlatT = -1.0f;
     }

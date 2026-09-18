@@ -143,7 +143,13 @@ private:
         glm::vec3 mFrom = glm::vec3(0.0f);
         glm::vec3 mTo = glm::vec3(0.0f);
         glm::vec3 mVelocity = glm::vec3(0.0f);   // rerack only
-        float mSpin = 0.0f;                      // rerack only
+
+        // Rerack: the disc turns about this axis while it is in the air, at mSpin degrees a
+        // second. An axis rather than a single angle, because a disc dropping out of a board
+        // tumbles end over end and lands leaning; turning it about one fixed axis only ever spins
+        // it on the spot and it arrives as upright as it left.
+        glm::vec3 mTumbleAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+        float mSpin = 0.0f;
         bool mInUse = false;
 
         // Rerack: false while the disc is still inside the board and can only travel straight down
