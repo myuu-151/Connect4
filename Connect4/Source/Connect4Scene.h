@@ -207,6 +207,7 @@ private:
     Box3D* mFootColliders[2] = { nullptr, nullptr };
 
     bool mDiscPhysicsRunning = false;
+    bool mRerackSoundPlayed = false;
 
     // Which of the chip model's local axes runs through the flat of the disc. Needed to work out
     // which way it is facing, since the model is free to be built along any of them.

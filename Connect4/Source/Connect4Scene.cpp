@@ -937,10 +937,28 @@ void Connect4Scene::UpdateRerack(float deltaTime)
         if (!mDiscPhysicsRunning)
         {
             StartDiscPhysics();
+        }
 
-            // Here rather than when the grid starts to lift: this is the moment the discs actually
-            // come out, which is what the sound is of.
-            PlayRerackSound();
+        // The clatter plays on the first disc to reach the table, not when they are let go. They
+        // are released at the top of the board and fall for the best part of a second, so playing
+        // it on release put the sound well ahead of anything hitting anything.
+        if (!mRerackSoundPlayed)
+        {
+            const float contactY = mTableY + mDiscRadius * 2.5f;
+
+            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+            {
+                const Disc& disc = mDiscs[i];
+
+                if (disc.mInUse &&
+                    disc.mNode != nullptr &&
+                    disc.mNode->GetWorldPosition().y <= contactY)
+                {
+                    PlayRerackSound();
+                    mRerackSoundPlayed = true;
+                    break;
+                }
+            }
         }
 
         // Give them a moment before checking: they start slow, and asking immediately would find
@@ -1119,11 +1137,16 @@ void Connect4Scene::StartDiscPhysics()
         disc.mNode->SetCollisionShape(shape);
 
         disc.mNode->SetMass(0.05f);
-        disc.mNode->SetFriction(0.35f);
-        disc.mNode->SetRollingFriction(0.008f);  // some, or they roll on their edges forever
-        disc.mNode->SetRestitution(0.45f);       // light plastic clatters rather than thuds
-        disc.mNode->SetLinearDamping(0.0f);
-        disc.mNode->SetAngularDamping(0.03f);
+        disc.mNode->SetFriction(0.5f);
+        disc.mNode->SetRestitution(0.35f);       // light plastic clatters rather than thuds
+        disc.mNode->SetLinearDamping(0.02f);
+
+        // Rolling friction and angular damping stay low on purpose. They are what slows a disc
+        // rolling away on its edge, which is the best thing the simulation does -- the spinning on
+        // the spot is a different rotation entirely and is dealt with below, so there is no reason
+        // to spend these on it and flatten the rolling in the process.
+        disc.mNode->SetRollingFriction(0.012f);
+        disc.mNode->SetAngularDamping(0.1f);
 
         disc.mNode->EnableCollision(true);
         disc.mNode->EnablePhysics(true);
@@ -1145,8 +1168,24 @@ void Connect4Scene::StartDiscPhysics()
         // this to be inconsistent with.
         if (world != nullptr && world->GetDynamicsWorld() != nullptr && disc.mNode->GetRigidBody() != nullptr)
         {
+            btRigidBody* body = disc.mNode->GetRigidBody();
+
             const btVector3 worldGravity = world->GetDynamicsWorld()->getGravity();
-            disc.mNode->GetRigidBody()->setGravity(worldGravity * kDiscGravityScale);
+            body->setGravity(worldGravity * kDiscGravityScale);
+
+            // Spinning friction, which is the one that stops a disc turning on the spot.
+            //
+            // Rolling friction resists a disc rolling along on its edge; nothing in it opposes a
+            // rotation about the point of contact, so a disc that came to rest flat kept spinning
+            // where it lay with only damping to slow it, which took a very long time. This is the
+            // parameter for that case and it was simply never set.
+            body->setSpinningFriction(0.08f);
+
+            // Let them go to sleep. Bullet's defaults are sized for a world measured in metres,
+            // and the board is centimetres across, so a disc drifting far too slowly to see never
+            // came near the threshold and stayed awake indefinitely.
+            const float spacing = mLayout.GetRowSpacing();
+            body->setSleepingThresholds(spacing * 0.6f, 0.8f);
         }
 
         // The spread it was given when the tray was pulled, and a turn to go with it.
@@ -1338,6 +1377,7 @@ void Connect4Scene::BeginRerack()
 
     mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
+    mRerackSoundPlayed = false;
 
     HideCursorDisc();
 
