@@ -141,6 +141,10 @@ private:
         glm::vec3 mVelocity = glm::vec3(0.0f);   // rerack only
         float mSpin = 0.0f;                      // rerack only
         bool mInUse = false;
+
+        // Rerack: false while the disc is still inside the board and can only travel straight down
+        // its column, true once it is clear of the frame and free to spread.
+        bool mCleared = false;
     };
 
     Disc mDiscs[C4::kCols * C4::kRows];
@@ -170,6 +174,10 @@ private:
     // bottom of the stand.
     float mTableY = 0.0f;
     float mDiscRestOffset = 0.0f;
+
+    // The underside of the frame, unlifted. A disc is still inside the board until it is below
+    // this plus however far the grid has risen.
+    float mFrameBottomY = 0.0f;
 
     RerackPhase mRerackPhase = RerackPhase::Idle;
     float mRerackTime = 0.0f;

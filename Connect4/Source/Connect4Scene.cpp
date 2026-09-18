@@ -392,6 +392,7 @@ bool Connect4Scene::Initialize()
     }
 
     mTableY = frameBottomY - frameHeightWorld * 0.20f;
+    mFrameBottomY = frameBottomY;
 
     if (mStandNode != nullptr)
     {
@@ -864,6 +865,10 @@ void Connect4Scene::UpdateRerack(float deltaTime)
         const float restY = mTableY + mDiscRestOffset;
         const float restSpeed = kDiscRestSpeed * spacing;
 
+        // The underside of the grid where it now stands, having been lifted. A disc is out of the
+        // board once it is below this.
+        const float exitY = mFrameBottomY + mLiftDistance;
+
         bool anyMoving = false;
 
         for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
@@ -884,6 +889,18 @@ void Connect4Scene::UpdateRerack(float deltaTime)
             }
 
             anyMoving = true;
+
+            // Clear of the board? Then it can start to spread. Until it is, only gravity acts on
+            // it, so it drops down the column and out through the bottom.
+            if (!disc.mCleared && pos.y <= exitY)
+            {
+                disc.mCleared = true;
+
+                // mFrom is holding the spread this disc was given when it was released; it is not
+                // needed as a start point once the fall is under way.
+                disc.mVelocity.x = disc.mFrom.x;
+                disc.mVelocity.z = disc.mFrom.z;
+            }
 
             disc.mVelocity.y -= gravity * deltaTime;
             pos += disc.mVelocity * deltaTime;
@@ -1056,13 +1073,17 @@ void Connect4Scene::BeginRerack()
 
         const float spacing = mLayout.GetRowSpacing();
 
-        // Spill outwards, towards the player, as well as drifting sideways. Dropping straight
-        // down leaves every disc inside the board's own footprint, where it is hard to tell a disc
-        // that has landed on the table from one that has stopped somewhere it should not have; and
-        // discs falling out of a board that has just been lifted off them would spread anyway.
-        // Gravity supplies the downward speed -- they are released, not thrown.
-        disc.mVelocity = mSpillAxis * (spacing * 0.9f)
-                       + glm::vec3(rx * spacing * 0.8f, 0.0f, rz * spacing * 0.8f);
+        // Straight down to begin with. A disc still inside the board can only go one way -- down
+        // its own column and out of the bottom -- and letting it drift sideways immediately sent it
+        // out through the plastic instead of through the opening the tray just uncovered.
+        //
+        // The spread is held here and applied the moment it clears the frame.
+        disc.mVelocity = glm::vec3(0.0f);
+        disc.mCleared = false;
+
+        disc.mFrom = mSpillAxis * (spacing * 0.9f)
+                   + glm::vec3(rx * spacing * 0.8f, 0.0f, rz * spacing * 0.8f);
+
         disc.mSpin = rs * 540.0f;
     }
 }
