@@ -19,16 +19,11 @@
 	"nodes":[
 		{
 			"mesh":0,
-			"name":"MainFrame",
+			"name":"Feet",
 			"scale":[
 				0.009999999776482582,
 				0.010000002570450306,
 				0.010000002570450306
-			],
-			"translation":[
-				0,
-				-0.8123430013656616,
-				0
 			]
 		}
 	],
@@ -58,7 +53,7 @@
 					"ior":1000
 				}
 			},
-			"name":"BluePlastic.001",
+			"name":"BluePlastic.002",
 			"occlusionTexture":{
 				"index":2,
 				"strength":0.3294145464897156
@@ -76,7 +71,7 @@
 	],
 	"meshes":[
 		{
-			"name":"Stand1_BluePlastic_0.001",
+			"name":"Stand1_BluePlastic_0.004",
 			"primitives":[
 				{
 					"attributes":{
@@ -129,61 +124,61 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":6107,
+			"count":325,
 			"max":[
-				416.5579528808594,
-				806.8204345703125,
-				2.458861827850342
+				448.5098571777344,
+				340.0478515625,
+				105.0184326171875
 			],
 			"min":[
-				-416.5579528808594,
-				135.8878173828125,
-				-65.48263549804688
+				-447.4224548339844,
+				-0.8073272705078125,
+				-167.09304809570312
 			],
 			"type":"VEC3"
 		},
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":6107,
+			"count":325,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":6107,
+			"count":325,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5123,
-			"count":15258,
+			"count":660,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":73284,
+			"byteLength":3900,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":73284,
-			"byteOffset":73284,
+			"byteLength":3900,
+			"byteOffset":3900,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":48856,
-			"byteOffset":146568,
+			"byteLength":2600,
+			"byteOffset":7800,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":30516,
-			"byteOffset":195424,
+			"byteLength":1320,
+			"byteOffset":10400,
 			"target":34963
 		}
 	],
@@ -195,8 +190,8 @@
 	],
 	"buffers":[
 		{
-			"byteLength":225940,
-			"uri":"MainFrame.bin"
+			"byteLength":11720,
+			"uri":"Stand.bin"
 		}
 	]
 }
