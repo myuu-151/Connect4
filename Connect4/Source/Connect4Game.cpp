@@ -333,8 +333,7 @@ void Connect4Game::OnDiscDropped(const C4::Move& move)
     // The move is already decided by the rules, so the fall only has to look right: it starts at
     // the column's entry point and ends on that cell's still point.
     mScene.BeginDrop(move, mTurn);
-
-    // TODO: release sound
+    mScene.PlayDropSound();
 }
 
 void Connect4Game::OnDiscLanded(const C4::Move& move)
@@ -343,8 +342,7 @@ void Connect4Game::OnDiscLanded(const C4::Move& move)
 
     // The disc is snapped onto its still point by the scene as the animation ends, so the stack
     // cannot drift over a long game.
-
-    // TODO: clack sound
+    mScene.PlayLandSound();
 }
 
 void Connect4Game::OnGameEnded(C4::Result result)

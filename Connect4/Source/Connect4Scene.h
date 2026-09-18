@@ -13,6 +13,7 @@ class StaticMesh3D;
 class StaticMesh;
 class Material;
 class Box3D;
+class SoundWave;
 
 // The presentation half of Connect Four: everything the rules layer deliberately knows nothing
 // about. Board.h decides what happens, this decides what it looks like.
@@ -86,6 +87,11 @@ public:
     void BeginDrop(const C4::Move& move, C4::Cell who);
     bool IsDropAnimating() const { return mDropActive; }
 
+    // --- sound --------------------------------------------------------------
+    void PlayDropSound();
+    void PlayLandSound();
+    void PlayRerackSound();
+
     // --- whole board --------------------------------------------------------
     void HighlightWin(const C4::Move* winLine);
     void BeginRerack();
@@ -132,6 +138,12 @@ private:
     Node3D* mDiscParent = nullptr;
     glm::vec3 mDiscScale = glm::vec3(1.0f);
     glm::vec3 mDiscRotation = glm::vec3(0.0f);
+
+    // Optional: a missing sound is silent rather than a failure, so the game still runs with the
+    // audio not yet in place.
+    SoundWave* mSlotBeginSound = nullptr;
+    SoundWave* mSlotEndSound = nullptr;
+    SoundWave* mRerackSound = nullptr;
 
     StaticMesh* mDiscMesh = nullptr;
     Material* mRedMaterial = nullptr;

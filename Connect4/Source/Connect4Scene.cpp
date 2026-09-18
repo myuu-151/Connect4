@@ -4,6 +4,8 @@
 #include "World.h"
 #include "Log.h"
 #include "AssetManager.h"
+#include "AudioManager.h"
+#include "Assets/SoundWave.h"
 #include "Renderer.h"
 #include "Assets/StaticMesh.h"
 #include "Assets/MaterialLite.h"
@@ -497,6 +499,12 @@ bool Connect4Scene::Initialize()
     BuildObstacles();
     BuildPhysicsColliders();
 
+    // Sounds are optional. A name that is not there leaves that one silent rather than failing the
+    // whole scene, so the game still runs while the audio is being put together.
+    mSlotBeginSound = LoadAsset<SoundWave>("slot_begin");
+    mSlotEndSound = LoadAsset<SoundWave>("slot_end");
+    mRerackSound = LoadAsset<SoundWave>("rerack");
+
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
              mLiftDistance, mTrayDistance, mTableY, frameBottomY, bottomRowY);
 
@@ -953,6 +961,30 @@ void Connect4Scene::UpdateRerack(float deltaTime)
     }
 }
 
+void Connect4Scene::PlayDropSound()
+{
+    if (mSlotBeginSound != nullptr)
+    {
+        AudioManager::PlaySound2D(mSlotBeginSound);
+    }
+}
+
+void Connect4Scene::PlayLandSound()
+{
+    if (mSlotEndSound != nullptr)
+    {
+        AudioManager::PlaySound2D(mSlotEndSound);
+    }
+}
+
+void Connect4Scene::PlayRerackSound()
+{
+    if (mRerackSound != nullptr)
+    {
+        AudioManager::PlaySound2D(mRerackSound);
+    }
+}
+
 void Connect4Scene::BuildPhysicsColliders()
 {
     World* world = GetWorld(0);
@@ -1279,6 +1311,7 @@ void Connect4Scene::BeginRerack()
     mRerackPhase = RerackPhase::Lift;
     mRerackTime = 0.0f;
 
+    PlayRerackSound();
     HideCursorDisc();
 
     // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
