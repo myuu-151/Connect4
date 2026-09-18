@@ -265,6 +265,14 @@ bool Connect4Scene::Initialize()
         yellowChip->SetVisible(false);
     }
 
+    // Failing that, take the yellow chip's material straight from the assets. The chip only has to
+    // have been imported, not placed in the scene -- the pool draws the discs, so an instance of it
+    // sitting in the level serves no purpose beyond being somewhere to read the material from.
+    if (mYellowMaterial == nullptr)
+    {
+        mYellowMaterial = LoadAsset<Material>("M_Chip_Yellow_YellowChips");
+    }
+
     // Otherwise tint the red material. MaterialLite multiplies its colour over the texture, so the
     // chip keeps its moulding and wear instead of turning into a flat yellow disc.
     if (mYellowMaterial == nullptr && mRedMaterial != nullptr)
