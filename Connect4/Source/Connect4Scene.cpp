@@ -7,6 +7,7 @@
 #include "AudioManager.h"
 #include "Assets/SoundWave.h"
 #include "Renderer.h"
+#include "Enums.h"
 #include "Assets/StaticMesh.h"
 #include "Assets/MaterialLite.h"
 #include "Nodes/Node.h"
@@ -1995,6 +1996,18 @@ void Connect4Scene::BeginRerack()
     mRerackTime = 0.0f;
     mRerackSoundPlayed = false;
 
+    // Draw the collision shapes for the duration.
+    //
+    // All of this has been reasoned about from the code and almost none of it checked against what
+    // is actually in the world. Seeing the shapes answers in one look what rounds of adjusting
+    // numbers could not: whether a disc's collider is the size of the disc, and whether the table
+    // and the stand's feet are anywhere near where they were meant to be.
+    if (Renderer::Get() != nullptr)
+    {
+        Renderer::Get()->SetDebugMode(DEBUG_COLLISION);
+    }
+
+
     HideCursorDisc();
 
     // Point the pull at whoever is watching. The board's facing axis is a line, not a direction --
@@ -2102,6 +2115,11 @@ void Connect4Scene::BeginRerack()
 
 void Connect4Scene::ClearDiscs()
 {
+    if (Renderer::Get() != nullptr)
+    {
+        Renderer::Get()->SetDebugMode(DEBUG_NONE);
+    }
+
     // Not while the warm-up is running.
     //
     // The game calls NewGame as soon as the scene is initialised, and NewGame clears the discs --
