@@ -17,6 +17,7 @@
 #include "Nodes/3D/Box3d.h"
 
 #include "BulletCollision/CollisionShapes/btCylinderShape.h"
+#include "BulletCollision/CollisionShapes/btConvexInternalShape.h"
 
 #include <math.h>
 
@@ -1243,6 +1244,30 @@ void Connect4Scene::BuildPhysicsColliders()
         box->EnableCollision(true);
         box->EnablePhysics(true);
 
+        // And the same margin correction the discs get.
+        //
+        // A margin inflates a static box as surely as it fattens a disc, so the default 0.04 left
+        // the table's surface sitting that far above where it looks like it is -- further above it
+        // than a disc is wide. Discs came to rest hovering over the table and over the stand's
+        // feet, on a surface that was not where it appeared to be.
+        btCollisionShape* boxShape = box->GetCollisionShape();
+
+        if (boxShape != nullptr && boxShape->isConvex())
+        {
+            btConvexInternalShape* convex = static_cast<btConvexInternalShape*>(boxShape);
+
+            // What the box would be if nothing had been taken out of it for the margin.
+            const btScalar oldMargin = convex->getMargin();
+            const btVector3 trueHalfExtents = convex->getImplicitShapeDimensions() +
+                                              btVector3(oldMargin, oldMargin, oldMargin);
+
+            const btScalar newMargin = btMax(btScalar(trueHalfExtents[trueHalfExtents.minAxis()] * 0.1f),
+                                             btScalar(0.00001f));
+
+            convex->setMargin(newMargin);
+            convex->setImplicitShapeDimensions(trueHalfExtents - btVector3(newMargin, newMargin, newMargin));
+        }
+
         // Present for collision only; there is already a table and a stand to look at.
         box->SetVisible(false);
 
@@ -1464,12 +1489,46 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     const float r = mDiscLocalRadius;
     const float h = mDiscLocalHalfThickness;
 
+    btVector3 halfExtents;
+    btCylinderShape* cylinder = nullptr;
+
     switch (mDiscFaceAxis)
     {
-    case 0:  shape = new btCylinderShapeX(btVector3(h, r, r)); break;
-    case 1:  shape = new btCylinderShape(btVector3(r, h, r));  break;
-    default: shape = new btCylinderShapeZ(btVector3(r, r, h)); break;
+    case 0:  halfExtents = btVector3(h, r, r); cylinder = new btCylinderShapeX(halfExtents); break;
+    case 1:  halfExtents = btVector3(r, h, r); cylinder = new btCylinderShape(halfExtents);  break;
+    default: halfExtents = btVector3(r, r, h); cylinder = new btCylinderShapeZ(halfExtents); break;
     }
+
+    shape = cylinder;
+
+    // Size the collision margin to the disc's world size.
+    //
+    // This is the single reason the rerack never looked like physics. A margin is a rounded skin
+    // Bullet keeps around a convex shape, and it is the shape the solver actually collides with.
+    // Bullet's default is 0.04 -- chosen for a world measured in metres -- and, as its own header
+    // says, "collisionMargin is not scaled". The engine applies the node's world scale to the
+    // shape every frame; the margin is left exactly where it was.
+    //
+    // The discs sit under a transform at 0.03, so the cylinder's real dimensions scale down to
+    // thousandths of a unit while the margin stays put and ends up several times larger than the
+    // disc it is wrapping. What the solver sees is not a disc at all: it is a rounded blob with no
+    // flat face to lie on, no rim to roll along and no edge to tip over. Hence discs that will not
+    // tumble, rest at angles nothing could hold them at, and sink into one another -- and hence
+    // every attempt to fix those by adjusting gravity, friction, damping and solver iterations
+    // failing, because none of them were the problem.
+    //
+    // The margin has to be a fraction of the disc's size as it is actually simulated, and the core
+    // dimensions have to give that room back so the disc still ends up its true thickness. The
+    // shape is built in the model's units and scaled afterwards, so the margin -- which is not
+    // scaled -- is divided back out of the dimensions here.
+    const glm::vec3 nodeScale = disc.mNode->GetWorldScale();
+    const float uniformScale = glm::max(glm::min(glm::min(nodeScale.x, nodeScale.y), nodeScale.z), 0.0001f);
+
+    const float smallestWorldHalfExtent = glm::min(h, r) * uniformScale;
+    const float margin = glm::max(smallestWorldHalfExtent * 0.1f, 0.00001f);
+
+    cylinder->setMargin(margin);
+    cylinder->setImplicitShapeDimensions(halfExtents - btVector3(margin, margin, margin) / uniformScale);
 
     disc.mNode->SetCollisionShape(shape);
 
