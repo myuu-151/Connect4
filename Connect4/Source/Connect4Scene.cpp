@@ -1292,7 +1292,26 @@ void Connect4Scene::StartDiscPhysics()
         btContactSolverInfo& solverInfo = world->GetDynamicsWorld()->getSolverInfo();
 
         mSavedSolverIterations = solverInfo.m_numIterations;
-        solverInfo.m_numIterations = 8;
+
+        // Settle quickly enough to be worth having.
+        //
+        // Bullet sleeps a body after it has held still for gDeactivationTime, which defaults to two
+        // seconds of simulated time. In a rerack that is running behind real time that is a very
+        // long wait, and a disc that has plainly finished goes on being solved for all of it.
+        // Sleeping is the mechanism that makes a full board affordable -- the pile settles from the
+        // bottom and each disc leaves the solver as it comes to rest -- so it has to happen while
+        // there is still something left to save.
+        gDeactivationTime = 0.4f;
+
+        // Four while the rerack runs.
+        //
+        // The solver's cost is iterations times constraints times substeps, and a full board is
+        // 165ms of a 199ms frame -- measured, with collision detection accounting for only 15ms of
+        // it, so this is where the time goes. Eight was chosen to stop a loosely-solved pile from
+        // sinking into itself, back when the discs were colliding as rounded blobs and no number of
+        // iterations could have stacked them properly. With the collision margins fixed the pile
+        // holds together at four, and four costs half as much.
+        solverInfo.m_numIterations = 4;
     }
 
     mDiscPhysicsRunning = true;
@@ -1876,6 +1895,9 @@ void Connect4Scene::StopDiscPhysics()
         world->GetDynamicsWorld()->getSolverInfo().m_numIterations = mSavedSolverIterations;
         mSavedSolverIterations = 0;
     }
+
+    // And Bullet's own default, since it is a global and nothing else in the scene asked for this.
+    gDeactivationTime = 2.0f;
 
     mDiscPhysicsRunning = false;
 }
