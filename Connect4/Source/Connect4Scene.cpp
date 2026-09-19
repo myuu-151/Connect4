@@ -1688,6 +1688,17 @@ void Connect4Scene::TipOverIfStanding(float deltaTime)
 
         if (glm::length(axis) > 0.001f)
         {
+            // Wake it first.
+            //
+            // Bullet deactivates a body once it stops, and a sleeping body ignores everything --
+            // so this torque was being thrown away every frame at exactly the moment it was
+            // needed. The disc stood there untouched until retirement gave up on it and laid it
+            // flat by hand, which is why it sat still and then snapped over.
+            if (disc.mNode->GetRigidBody() != nullptr)
+            {
+                disc.mNode->GetRigidBody()->activate(true);
+            }
+
             disc.mNode->AddAngularVelocity(glm::normalize(axis) * kToppleAccel * deltaTime);
         }
     }
@@ -2073,9 +2084,12 @@ void Connect4Scene::BeginRerack()
         // given the same shove and the whole set set off together; the problem then was that the
         // push was shared, not that it existed. Most of this is per disc, so they go their own
         // ways rather than travelling as a block.
-        disc.mFrom = mSpreadAxis * (rx * spacing * 2.6f)
-                   + mSpillAxis * (spacing * 0.45f)
-                   + glm::vec3(0.0f, 0.0f, rz * spacing * 1.4f);
+        // Scaled against the board, which is small -- a row spacing is a few centimetres, so what
+        // looked like a generous multiplier was a few centimetres of drift across the whole fall,
+        // less than a disc's width. These are the numbers that actually move a disc somewhere.
+        disc.mFrom = mSpreadAxis * (rx * spacing * 11.0f)
+                   + mSpillAxis * (spacing * 2.0f)
+                   + glm::vec3(0.0f, 0.0f, rz * spacing * 6.0f);
 
     }
 }
