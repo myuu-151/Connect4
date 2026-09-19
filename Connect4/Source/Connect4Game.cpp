@@ -107,20 +107,6 @@ void Connect4Game::Update(float deltaTime)
         OctLog("Connect4: first frame");
     }
 
-    // Debug: B fills the board and reracks it, from any state.
-    //
-    // A full rerack is the heaviest thing the game does and the only way to reach one by playing is
-    // forty-two moves ending in a draw, which is no way to look at it.
-    if (IsGamepadButtonJustDown(GAMEPAD_B, kPad) && mState != State::Reracking)
-    {
-        mBoard.Reset();
-        mScene.FillBoardForDebug();
-        StartRerack();
-
-        mScene.Update(deltaTime);
-        return;
-    }
-
     switch (mState)
     {
     case State::Playing:   UpdatePlaying(deltaTime);   break;
