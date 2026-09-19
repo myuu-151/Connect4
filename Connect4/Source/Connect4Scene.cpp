@@ -16,8 +16,9 @@
 #include "Nodes/3D/Camera3d.h"
 #include "Nodes/3D/Box3d.h"
 
-#include "BulletCollision/CollisionShapes/btCylinderShape.h"
+#include "BulletCollision/CollisionShapes/btConvexHullShape.h"
 #include "BulletCollision/CollisionShapes/btConvexInternalShape.h"
+#include "BulletCollision/CollisionShapes/btPolyhedralConvexShape.h"
 
 #include <math.h>
 
@@ -1206,6 +1207,17 @@ void Connect4Scene::BuildPhysicsColliders()
 
             convex->setMargin(newMargin);
             convex->setImplicitShapeDimensions(trueHalfExtents - btVector3(newMargin, newMargin, newMargin));
+
+            // And give the box a convex polyhedron, so disc against table takes the same
+            // separating-axis path the discs take against each other rather than dropping back to
+            // GJK. A box is already a polyhedron; it simply is not asked to describe itself as one
+            // unless someone does this.
+            btPolyhedralConvexShape* polyhedral = dynamic_cast<btPolyhedralConvexShape*>(convex);
+
+            if (polyhedral != nullptr)
+            {
+                polyhedral->initializePolyhedralFeatures();
+            }
         }
 
         // Present for collision only; there is already a table and a stand to look at.
@@ -1436,46 +1448,67 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     const float r = mDiscLocalRadius;
     const float h = mDiscLocalHalfThickness;
 
-    btVector3 halfExtents;
-    btCylinderShape* cylinder = nullptr;
-
-    switch (mDiscFaceAxis)
-    {
-    case 0:  halfExtents = btVector3(h, r, r); cylinder = new btCylinderShapeX(halfExtents); break;
-    case 1:  halfExtents = btVector3(r, h, r); cylinder = new btCylinderShape(halfExtents);  break;
-    default: halfExtents = btVector3(r, r, h); cylinder = new btCylinderShapeZ(halfExtents); break;
-    }
-
-    shape = cylinder;
-
-    // Size the collision margin to the disc's world size.
+    // A twelve-sided prism, as a convex hull with its polyhedral features built.
     //
-    // This is the single reason the rerack never looked like physics. A margin is a rounded skin
-    // Bullet keeps around a convex shape, and it is the shape the solver actually collides with.
-    // Bullet's default is 0.04 -- chosen for a world measured in metres -- and, as its own header
-    // says, "collisionMargin is not scaled". The engine applies the node's world scale to the
-    // shape every frame; the margin is left exactly where it was.
+    // It was a btCylinderShape, and that is what a full rerack cost. Cylinder against cylinder goes
+    // through GJK, and an overlap deep enough to need a penetration depth falls into EPA, which is
+    // expensive and yields a single contact point per pair per step -- so a pile of them pays for
+    // EPA on every pair, every step, and then needs many solver iterations to accumulate enough
+    // points to stack at all.
     //
-    // The discs sit under a transform at 0.03, so the cylinder's real dimensions scale down to
-    // thousandths of a unit while the margin stays put and ends up several times larger than the
-    // disc it is wrapping. What the solver sees is not a disc at all: it is a rounded blob with no
-    // flat face to lie on, no rim to roll along and no edge to tip over. Hence discs that will not
-    // tumble, rest at angles nothing could hold them at, and sink into one another -- and hence
-    // every attempt to fix those by adjusting gravity, friction, damping and solver iterations
-    // failing, because none of them were the problem.
+    // Measured: at a full board the frame was 199ms with 165ms of physics, and halving the solver
+    // iterations barely moved it. The time is in generating contacts, not in solving them.
     //
-    // The margin has to be a fraction of the disc's size as it is actually simulated, and the core
-    // dimensions have to give that room back so the disc still ends up its true thickness. The
-    // shape is built in the model's units and scaled afterwards, so the margin -- which is not
-    // scaled -- is divided back out of the dimensions here.
+    // Bullet has a much better path for shapes that are genuinely polyhedra: separating-axis tests
+    // and face clipping, which produce a complete manifold in one shot with no EPA anywhere. It is
+    // taken when both shapes have a convex polyhedron built, which a hull does once it is asked and
+    // a cylinder never does. Twelve sides is round enough to roll on its rim and to read as a disc.
+    const uint32_t kDiscSides = 12;
+
     const glm::vec3 nodeScale = disc.mNode->GetWorldScale();
     const float uniformScale = glm::max(glm::min(glm::min(nodeScale.x, nodeScale.y), nodeScale.z), 0.0001f);
 
+    // Margin sized to the disc as it is actually simulated, not to Bullet's metre-scale default.
     const float smallestWorldHalfExtent = glm::min(h, r) * uniformScale;
     const float margin = glm::max(smallestWorldHalfExtent * 0.1f, 0.00001f);
+    const float localMargin = margin / uniformScale;
 
-    cylinder->setMargin(margin);
-    cylinder->setImplicitShapeDimensions(halfExtents - btVector3(margin, margin, margin) / uniformScale);
+    // The hull adds its margin on the outside, so build the points in by that much to keep the
+    // disc its true size.
+    const float hullR = glm::max(r - localMargin, r * 0.5f);
+    const float hullH = glm::max(h - localMargin, h * 0.5f);
+
+    btConvexHullShape* hull = new btConvexHullShape();
+
+    for (uint32_t i = 0; i < kDiscSides; ++i)
+    {
+        const float angle = (2.0f * PI * float(i)) / float(kDiscSides);
+        const float a = cosf(angle) * hullR;
+        const float b = sinf(angle) * hullR;
+
+        for (int32_t side = -1; side <= 1; side += 2)
+        {
+            const float t = hullH * float(side);
+
+            switch (mDiscFaceAxis)
+            {
+            case 0:  hull->addPoint(btVector3(t, a, b), false); break;
+            case 1:  hull->addPoint(btVector3(a, t, b), false); break;
+            default: hull->addPoint(btVector3(a, b, t), false); break;
+            }
+        }
+    }
+
+    hull->recalcLocalAabb();
+    hull->setMargin(margin);
+
+    // Scale first, then build the polyhedron: it is baked from the points as they are scaled at the
+    // time it is asked for, and the engine re-applies this same scale every frame without asking
+    // again. The discs never change scale, so this is stable.
+    hull->setLocalScaling(btVector3(uniformScale, uniformScale, uniformScale));
+    hull->initializePolyhedralFeatures();
+
+    shape = hull;
 
     disc.mNode->SetCollisionShape(shape);
 
