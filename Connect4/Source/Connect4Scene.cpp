@@ -97,7 +97,7 @@ const float kPullDepthMul = 2.2f;
 // How much of the world's gravity the discs feel. Below 1 because the board is only centimetres
 // across in world units: at full gravity a disc falls its own height in a few hundredths of a
 // second, which is correct and unwatchable.
-const float kDiscGravityScale = 0.70f;
+const float kDiscGravityScale = 0.45f;
 
 // How long a disc has to go nowhere before it is taken out of the simulation.
 //
@@ -113,7 +113,7 @@ const float kDiscMaxLiveTime = 8.0f;
 // How hard a disc left standing on its edge is leaned on, in radians per second squared. Enough to
 // get it past its balance point in a fraction of a second; gravity does the rest, which is the
 // whole point of doing this rather than rotating it by hand.
-const float kToppleAccel = 7.0f;
+const float kToppleAccel = 4.0f;
 
 // How many discs are simulated at once.
 //
@@ -1624,7 +1624,9 @@ void Connect4Scene::TipOverIfStanding(float deltaTime)
         return;
     }
 
-    const float goingNowhere = mLayout.GetRowSpacing() * 0.8f;
+    // Strict, so a disc still sliding or rolling is left to do it. Tipping one that is
+    // still travelling is what made the landing read as drop, stop, flop.
+    const float goingNowhere = mLayout.GetRowSpacing() * 0.25f;
 
     glm::vec3 localNormal(0.0f);
     localNormal[glm::clamp(mDiscFaceAxis, 0, 2)] = 1.0f;
@@ -2044,9 +2046,13 @@ void Connect4Scene::BeginRerack()
         disc.mSlowTime = 0.0f;
         disc.mFlatT = -1.0f;
 
-        disc.mFrom = mSpreadAxis * (rx * spacing * 0.35f)
-                   + mSpillAxis * (spacing * 0.1f)
-                   + glm::vec3(0.0f, 0.0f, rz * spacing * 0.2f);
+        // Enough push to spread out. This was cut to almost nothing when every disc was being
+        // given the same shove and the whole set set off together; the problem then was that the
+        // push was shared, not that it existed. Most of this is per disc, so they go their own
+        // ways rather than travelling as a block.
+        disc.mFrom = mSpreadAxis * (rx * spacing * 2.6f)
+                   + mSpillAxis * (spacing * 0.45f)
+                   + glm::vec3(0.0f, 0.0f, rz * spacing * 1.4f);
 
     }
 }
