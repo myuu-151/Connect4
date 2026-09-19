@@ -112,6 +112,10 @@ const float kDiscRetireTime = 2.0f;
 // The longest any disc is simulated for. A backstop against one that never settles.
 const float kDiscMaxLiveTime = 8.0f;
 
+// What a disc weighs. Only meaningful against the other masses in the scene, and everything else
+// here is static, so this is really just "light".
+const float kDiscMass = 0.05f;
+
 // The collision group the rerack runs in.
 //
 // Discs collide with each other, with the table and with the stand's feet, and with nothing else.
@@ -1532,7 +1536,7 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
 
     disc.mNode->SetCollisionShape(shape);
 
-    disc.mNode->SetMass(0.05f);
+    disc.mNode->SetMass(kDiscMass);
     disc.mNode->SetFriction(0.5f);
     disc.mNode->SetRestitution(0.35f);       // light plastic clatters rather than thuds
     disc.mNode->SetLinearDamping(0.02f);
@@ -1570,6 +1574,31 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     if (world != nullptr && world->GetDynamicsWorld() != nullptr && disc.mNode->GetRigidBody() != nullptr)
     {
         btRigidBody* body = disc.mNode->GetRigidBody();
+
+        // Force the mass properties onto the body rather than trusting SetMass.
+        //
+        // Primitive3D::SetMass does nothing at all when the value has not changed, and after the
+        // startup warm-up every disc already carries this mass -- so on a real rerack the call
+        // above is a no-op and the body keeps whatever inertia it was last given. The warm-up also
+        // means the rigid body already exists, so the release takes the swap-the-shape path rather
+        // than building a body around a fresh cylinder.
+        //
+        // Neither is a problem on its own, but both make the disc's dynamics depend on what
+        // happened to it earlier in the session rather than on what is being asked for now. Setting
+        // it here, from the shape that is actually attached, does not care.
+        btCollisionShape* attached = body->getCollisionShape();
+
+        if (attached != nullptr && attached->getShapeType() != EMPTY_SHAPE_PROXYTYPE)
+        {
+            btVector3 inertia(0.0f, 0.0f, 0.0f);
+            attached->calculateLocalInertia(kDiscMass, inertia);
+            body->setMassProps(kDiscMass, inertia);
+            body->updateInertiaTensor();
+        }
+
+        // Free to turn about every axis. Nothing sets this otherwise, but a body that cannot
+        // rotate is indistinguishable from the fault being chased here, so it is stated.
+        body->setAngularFactor(btVector3(1.0f, 1.0f, 1.0f));
 
         const btVector3 worldGravity = world->GetDynamicsWorld()->getGravity();
         body->setGravity(worldGravity * kDiscGravityScale);
