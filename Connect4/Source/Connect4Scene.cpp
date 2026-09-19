@@ -164,7 +164,10 @@ const float kToppleAccel = 4.0f;
 // If a full board starts crashing again, this is the number to lower -- but the real fix is to stop
 // large textures sitting in memory as RGBA8 when RGB5A3 holds them at half the size with their
 // alpha intact.
-const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
+const uint32_t kMaxLiveDiscs = 20;
+
+// How many frames the startup warm-up runs for.
+const int32_t kWarmUpFrames = 45;
 
 // How many frames the startup warm-up runs for.
 // Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
@@ -732,6 +735,118 @@ bool Connect4Scene::Initialize()
     }
 
     mReady = true;
+
+    // Grow Bullet's pools now, while memory is still clean.
+    //
+    // The solver and the contact clipping allocate as the pile gets tangled, and they ask for large
+    // contiguous blocks. By the time a game has been running the heap is fragmented by everything
+    // the scene loaded, so a block that would have been there at startup is not -- and Bullet does
+    // not check: btAlignedAllocDefault returns null and the next write goes through it. That is the
+    // DSI at DAR 00000000, and it took six reracks to turn up because the heap gets dirtier each
+    // time.
+    //
+    // These arrays are grown once and never shrunk, so growing them here means a rerack never has
+    // to allocate at all.
+    //
+    // The bodies dropped here are throwaways, never the game's discs. Dropping the real pool and
+    // switching it off again left every disc carrying warm-up state into its first rerack, which is
+    // why the rerack used to look stiff.
+    {
+        World* warmUpWorld = GetWorld(0);
+        Node* warmUpRootNode = warmUpWorld ? warmUpWorld->GetRootNode() : nullptr;
+        Node3D* warmUpParent = warmUpRootNode ? warmUpRootNode->As<Node3D>() : nullptr;
+        Node3D* mWarmUpRoot = nullptr;
+
+        if (warmUpParent != nullptr)
+        {
+            mWarmUpRoot = warmUpParent->CreateChild<Node3D>();
+        }
+
+        if (mWarmUpRoot != nullptr)
+        {
+            mWarmUpRoot->SetName("SolverWarmUp");
+
+            const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
+                                    glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
+
+            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+            {
+                Box3D* body = mWarmUpRoot->CreateChild<Box3D>();
+
+                if (body == nullptr)
+                {
+                    continue;
+                }
+
+                // The disc's own shape, so the polyhedral clipping allocates for the pairs it will
+                // actually see rather than for boxes.
+                body->SetCollisionShape(MakeDiscShape(1.0f));
+
+                // Three narrow columns: they collapse into each other on the way down and settle
+                // into something like the pile a rerack makes, which is what has to fit. An earlier
+                // version packed them deliberately overlapping to force the worst tangle
+                // imaginable, and asked for more memory than the machine has -- it crashed during
+                // the warm-up itself.
+                const float across = mDiscRadius * 0.7f;
+                const glm::vec3 offset(((i % 3) - 1) * across,
+                                       mDiscRadius * 1.1f * float(i / 3),
+                                       (((i / 3) % 3) - 1) * across);
+
+                body->SetWorldPosition(above + offset);
+
+                body->SetMass(kDiscMass);
+                body->SetFriction(0.5f);
+                body->SetRestitution(0.35f);
+
+                body->SetCollisionGroup(kRerackColGroup);
+                body->SetCollisionMask(kRerackColGroup);
+
+                body->EnableCollision(true);
+                body->EnablePhysics(true);
+
+                body->SetVisible(false);
+            }
+
+            // Step it here, while the loading screen is still up.
+            //
+            // This used to run over its first forty-five frames of gameplay, which meant the scene
+            // appeared and then stuttered through the warm-up in front of the player. Loading is
+            // synchronous, so the simulation can simply be stepped in this loop instead and the
+            // whole thing is finished before the first frame of the game is drawn.
+            btDynamicsWorld* dynamicsWorld = warmUpWorld->GetDynamicsWorld();
+            Renderer* renderer = Renderer::Get();
+
+            for (int32_t frame = 0; frame < kWarmUpFrames && dynamicsWorld != nullptr; ++frame)
+            {
+                dynamicsWorld->stepSimulation(1.0f / 60.0f, 1, 1.0f / 60.0f);
+
+                // Keep the loading screen alive, since nothing else is pumping frames in here.
+                if (renderer != nullptr)
+                {
+                    renderer->DrawLoadingFrame(0.9f + 0.1f * (float(frame) / float(kWarmUpFrames)),
+                                               "Preparing physics");
+                }
+            }
+
+            // Take them out of the world before they go, rather than leaving bodies in it for a
+            // deferred destroy to catch later.
+            for (uint32_t i = 0; i < mWarmUpRoot->GetNumChildren(); ++i)
+            {
+                Primitive3D* body = mWarmUpRoot->GetChild(i)->As<Primitive3D>();
+
+                if (body != nullptr)
+                {
+                    body->EnablePhysics(false);
+                    body->EnableCollision(false);
+                }
+            }
+
+            mWarmUpRoot->Destroy();
+            mWarmUpRoot = nullptr;
+
+            LogDebug("C4: solver warm-up done");
+        }
+    }
 
 
     OctLog("Connect4: scene ready");
@@ -1434,47 +1549,36 @@ void Connect4Scene::UpdateDiscRelease()
     }
 }
 
-void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
+// The disc collision shape: an eight-sided prism as a convex hull, with its polyhedral features
+// built so that disc-against-disc takes Bullet's separating-axis and face-clipping path.
+//
+// It was a btCylinderShape, and that is what a full rerack cost. Cylinder against cylinder goes
+// through GJK, and an overlap deep enough to need a penetration depth falls into EPA -- expensive,
+// and it yields a single contact point per pair per step, so a pile pays for EPA on every pair
+// every step and then needs many solver iterations to accumulate enough points to stack at all.
+// Measured: halving the solver iterations barely moved the frame time, which places the cost in
+// generating contacts rather than solving them.
+//
+// The polyhedral path produces a complete manifold in one shot with no EPA anywhere, but it is not
+// free in memory: every shape carries its own polyhedron, and the clipping allocates while it runs.
+// Eight sides rather than twelve keeps that down -- a disc spends most of its time lying flat, and
+// the facets only show when one rolls on its rim.
+//
+// One shape per body: a primitive owns its collision shape and frees it, so these cannot be shared.
+btConvexHullShape* Connect4Scene::MakeDiscShape(float uniformScale) const
 {
-    World* world = GetWorld(0);
-    const float spacing = mLayout.GetRowSpacing();
+    const uint32_t kDiscSides = 8;
 
-    disc.mAwaitingRelease = false;
-    uint32_t seed = 0x51ED2701u + index * 2654435761u;
-
-    // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
-    // and in the model's own units, since the node's scale is applied to the shape on top.
-    btCollisionShape* shape = nullptr;
     const float r = mDiscLocalRadius;
     const float h = mDiscLocalHalfThickness;
-
-    // A twelve-sided prism, as a convex hull with its polyhedral features built.
-    //
-    // It was a btCylinderShape, and that is what a full rerack cost. Cylinder against cylinder goes
-    // through GJK, and an overlap deep enough to need a penetration depth falls into EPA, which is
-    // expensive and yields a single contact point per pair per step -- so a pile of them pays for
-    // EPA on every pair, every step, and then needs many solver iterations to accumulate enough
-    // points to stack at all.
-    //
-    // Measured: at a full board the frame was 199ms with 165ms of physics, and halving the solver
-    // iterations barely moved it. The time is in generating contacts, not in solving them.
-    //
-    // Bullet has a much better path for shapes that are genuinely polyhedra: separating-axis tests
-    // and face clipping, which produce a complete manifold in one shot with no EPA anywhere. It is
-    // taken when both shapes have a convex polyhedron built, which a hull does once it is asked and
-    // a cylinder never does. Twelve sides is round enough to roll on its rim and to read as a disc.
-    const uint32_t kDiscSides = 12;
-
-    const glm::vec3 nodeScale = disc.mNode->GetWorldScale();
-    const float uniformScale = glm::max(glm::min(glm::min(nodeScale.x, nodeScale.y), nodeScale.z), 0.0001f);
 
     // Margin sized to the disc as it is actually simulated, not to Bullet's metre-scale default.
     const float smallestWorldHalfExtent = glm::min(h, r) * uniformScale;
     const float margin = glm::max(smallestWorldHalfExtent * 0.1f, 0.00001f);
     const float localMargin = margin / uniformScale;
 
-    // The hull adds its margin on the outside, so build the points in by that much to keep the
-    // disc its true size.
+    // The hull adds its margin on the outside, so build the points in by that much to keep the disc
+    // its true size.
     const float hullR = glm::max(r - localMargin, r * 0.5f);
     const float hullH = glm::max(h - localMargin, h * 0.5f);
 
@@ -1508,7 +1612,24 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     hull->setLocalScaling(btVector3(uniformScale, uniformScale, uniformScale));
     hull->initializePolyhedralFeatures();
 
-    shape = hull;
+    return hull;
+}
+
+void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
+{
+    World* world = GetWorld(0);
+    const float spacing = mLayout.GetRowSpacing();
+
+    disc.mAwaitingRelease = false;
+    uint32_t seed = 0x51ED2701u + index * 2654435761u;
+
+    // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
+    // and in the model's own units, since the node's scale is applied to the shape on top.
+    btCollisionShape* shape = nullptr;
+    const glm::vec3 nodeScale = disc.mNode->GetWorldScale();
+    const float uniformScale = glm::max(glm::min(glm::min(nodeScale.x, nodeScale.y), nodeScale.z), 0.0001f);
+
+    shape = MakeDiscShape(uniformScale);
 
     disc.mNode->SetCollisionShape(shape);
 
