@@ -130,6 +130,7 @@ private:
     bool AreDiscsAsleep() const;
     void UpdateToppling(float deltaTime);
     void UpdateDiscRetirement(float deltaTime);
+    void TipOverIfStanding(float deltaTime);
     void UpdateDiscRelease();
 
     // Makes Bullet reserve, while the game is still loading, the solver memory a full rerack will

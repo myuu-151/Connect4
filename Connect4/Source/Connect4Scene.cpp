@@ -97,18 +97,23 @@ const float kPullDepthMul = 2.2f;
 // How much of the world's gravity the discs feel. Below 1 because the board is only centimetres
 // across in world units: at full gravity a disc falls its own height in a few hundredths of a
 // second, which is correct and unwatchable.
-const float kDiscGravityScale = 0.38f;
+const float kDiscGravityScale = 0.70f;
 
-// How long between checks of whether a disc has gone anywhere.
-const float kDiscRetireTime = 0.5f;
+// How long a disc has to go nowhere before it is taken out of the simulation.
+//
+// This was half a second, which took discs out while they were still settling -- a pile relaxes
+// for a good while after it stops obviously moving, and cutting that short is most of why the
+// result did not look simulated. It is a backstop against a disc that never settles, not a way of
+// tidying up, so it should be long enough that a disc reaching it is genuinely stuck.
+const float kDiscRetireTime = 2.0f;
 
 // The longest any disc is simulated for. A backstop against one that never settles.
 const float kDiscMaxLiveTime = 8.0f;
 
-// How hard a disc left standing on its edge is nudged over, in radians per second. Only enough to
-// get it past its balance point -- gravity is what actually tips it, which is the whole point of
-// doing this rather than rotating it by hand.
-const float kToppleNudge = 2.2f;
+// How hard a disc left standing on its edge is leaned on, in radians per second squared. Enough to
+// get it past its balance point in a fraction of a second; gravity does the rest, which is the
+// whole point of doing this rather than rotating it by hand.
+const float kToppleAccel = 7.0f;
 
 // How many discs are simulated at once.
 //
@@ -1009,6 +1014,7 @@ void Connect4Scene::Update(float deltaTime)
     }
 
     UpdateDiscRelease();
+    TipOverIfStanding(deltaTime);
     UpdateDiscRetirement(deltaTime);
     UpdateToppling(deltaTime);
 }
@@ -1291,20 +1297,18 @@ void Connect4Scene::StartDiscPhysics()
         }
     }
 
-    // Fewer solver iterations while this is running.
+    // Slightly fewer solver iterations while this is running.
     //
-    // Forty-two discs landing on each other is the heaviest moment in the game, and the solver is
-    // where the time goes: it is the part that has to resolve a pile of stacked contacts, and its
-    // cost is roughly linear in the iteration count. Ten is the default and is aimed at simulations
-    // whose results matter; nothing here depends on the discs settling to any particular
-    // arrangement, so a looser solve costs nothing that can be seen and buys back most of the
-    // frame time.
+    // This was four, which is where most of the trouble came from: a pile solved that loosely
+    // sinks into itself, jitters, and will not stack, and every correction added on top of that was
+    // treating a symptom of it. Eight is close enough to the default to behave properly and still
+    // cheaper than ten at the heaviest moment in the game.
     if (world != nullptr && world->GetDynamicsWorld() != nullptr)
     {
         btContactSolverInfo& solverInfo = world->GetDynamicsWorld()->getSolverInfo();
 
         mSavedSolverIterations = solverInfo.m_numIterations;
-        solverInfo.m_numIterations = 4;
+        solverInfo.m_numIterations = 8;
     }
 
     mDiscPhysicsRunning = true;
@@ -1588,6 +1592,67 @@ void Connect4Scene::RetireDisc(Disc& disc)
 //
 // And it is the cost: a retired disc is one fewer body in the solver, which both keeps the frame
 // time down and makes room for the next disc waiting to be released.
+// Push over any disc that has come to rest standing on its edge.
+//
+// A disc on its edge is balanced, and Bullet will hold it there indefinitely -- the contact is
+// effectively a point, so nothing decides which way it should go. Real ones fall.
+//
+// This is a torque applied every frame, not a shove every so often. An earlier version nudged once
+// each time the disc was checked, half a second apart, which was both too weak to get it past the
+// balance point and visible as exactly that: a twitch, a pause, another twitch. Leaning on it
+// steadily tips it over in a fraction of a second and looks like nothing at all -- what is seen is
+// the disc falling, which is gravity's work once it is past the point of no return.
+void Connect4Scene::TipOverIfStanding(float deltaTime)
+{
+    if (!mDiscPhysicsRunning)
+    {
+        return;
+    }
+
+    const float goingNowhere = mLayout.GetRowSpacing() * 0.8f;
+
+    glm::vec3 localNormal(0.0f);
+    localNormal[glm::clamp(mDiscFaceAxis, 0, 2)] = 1.0f;
+
+    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    {
+        Disc& disc = mDiscs[i];
+
+        if (!disc.mInUse || disc.mNode == nullptr || !disc.mNode->IsPhysicsEnabled())
+        {
+            continue;
+        }
+
+        // Still travelling: leave it alone. A disc rolling away on its edge is supposed to be on
+        // its edge, and tipping it over mid-roll would be the same mistake as animating it flat.
+        if (glm::length(disc.mNode->GetLinearVelocity()) > goingNowhere)
+        {
+            continue;
+        }
+
+        const glm::vec3 normal = disc.mNode->GetWorldRotationQuat() * localNormal;
+        const float uprightness = glm::abs(normal.y);
+
+        // Only on the table. A disc propped against others at an angle is resting on something,
+        // and that is a real arrangement worth keeping.
+        const bool onTable = (disc.mNode->GetWorldPosition().y < mTableY + mDiscRadius * 1.25f);
+
+        if (uprightness > 0.6f || !onTable)
+        {
+            continue;
+        }
+
+        // About the axis that carries its face towards vertical, so it goes over the way it is
+        // already leaning rather than being turned to some chosen side.
+        glm::vec3 axis = glm::cross(normal, glm::vec3(0.0f, 1.0f, 0.0f));
+
+        if (glm::length(axis) > 0.001f)
+        {
+            disc.mNode->AddAngularVelocity(glm::normalize(axis) * kToppleAccel * deltaTime);
+        }
+    }
+}
+
 void Connect4Scene::UpdateDiscRetirement(float deltaTime)
 {
     if (!mDiscPhysicsRunning)
@@ -1639,41 +1704,8 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
             continue;
         }
 
-        // It has stopped going anywhere. If it stopped while still up on its edge, tip it over
-        // rather than retiring it there.
-        //
-        // It used to be laid flat by hand: taken out of the simulation and rotated onto its face
-        // over a fixed time. That reads as an animation rather than a fall, because it is one --
-        // every disc turning at the same rate through the same arc and arriving without a bounce.
-        //
-        // A nudge is enough instead. Past the balance point gravity does the rest, and what comes
-        // out is a real topple: it accelerates as it goes over, lands on its face, and settles
-        // against whatever is beside it.
-        glm::vec3 localNormal(0.0f);
-        localNormal[glm::clamp(mDiscFaceAxis, 0, 2)] = 1.0f;
-
-        const glm::vec3 normal = disc.mNode->GetWorldRotationQuat() * localNormal;
-        const float uprightness = glm::abs(normal.y);
-
-        const bool onEdge = (uprightness < 0.55f);
-        const bool onTable = (now.y < mTableY + mDiscRadius * 1.25f);
-
-        if (onEdge && onTable && disc.mLiveTime < kDiscMaxLiveTime * 0.75f)
-        {
-            // About the axis that carries its face towards vertical, which is the way it is
-            // already leaning, so it goes over the shortest way.
-            glm::vec3 axis = glm::cross(normal, glm::vec3(0.0f, 1.0f, 0.0f));
-
-            if (glm::length(axis) > 0.001f)
-            {
-                disc.mNode->AddAngularVelocity(glm::normalize(axis) * kToppleNudge);
-            }
-
-            // It is doing something again, so start the clock over.
-            disc.mSlowTime = 0.0f;
-            continue;
-        }
-
+        // It has stopped going anywhere, and TipOverIfStanding has had every frame since it landed
+        // to push it over. If it is still up at this point it is not going to come down on its own.
         RetireDisc(disc);
     }
 }
