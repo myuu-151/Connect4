@@ -1503,6 +1503,21 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
         // and the board is centimetres across, so a disc drifting far too slowly to see never
         // came near the threshold and stayed awake indefinitely.
         body->setSleepingThresholds(spacing * 0.6f, 0.8f);
+
+        // Sweep the disc along its path instead of testing where it lands.
+        //
+        // This is the difference between the rerack looking simulated and not. A disc is about
+        // twenty millimetres thick and, half a second into a fall, covers ninety in a single
+        // physics step -- four times its own thickness. Without a swept test it is on one side of
+        // another disc in one step and the far side in the next, so the contact between them is
+        // found late or missed altogether. Everything then looks wrong at once: discs pass through
+        // each other, land at the wrong height, stop dead for no reason.
+        //
+        // No amount of adjusting gravity, friction or solver iterations can fix that, because the
+        // contacts being solved are the wrong ones. Several rounds of tuning went into symptoms of
+        // it before the arithmetic was checked.
+        body->setCcdMotionThreshold(mDiscHalfThickness);
+        body->setCcdSweptSphereRadius(mDiscHalfThickness * 0.8f);
     }
 
     // The spread it was given when the tray was pulled, and a turn to go with it.
