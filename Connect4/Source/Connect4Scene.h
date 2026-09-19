@@ -76,8 +76,8 @@ public:
 
     bool IsReady() const { return mReady; }
 
-    // True while the startup warm-up is running. The whole disc pool is in use during it, so the
-    // game must not try to take a disc from it.
+    // True while the startup warm-up is running. The game waits for it, so that a disc cannot be
+    // slotted before the solver has the memory a rerack will need.
     bool IsWarmingUp() const { return mWarmUpFrames > 0; }
 
     void Update(float deltaTime);
@@ -247,6 +247,9 @@ private:
 
     // Counts down the frames of the startup warm-up. Zero once it is done.
     int32_t mWarmUpFrames = 0;
+
+    // Parent of the throwaway bodies the warm-up drops. Destroyed when it finishes.
+    Node3D* mWarmUpRoot = nullptr;
     bool mRerackSoundPlayed = false;
 
     // The solver setting in force before the rerack, put back afterwards.

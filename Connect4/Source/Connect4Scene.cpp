@@ -732,61 +732,78 @@ bool Connect4Scene::Initialize()
 
     mReady = true;
 
-    // Drop the whole set once, out of sight, so Bullet sizes its solver arrays now rather than
-    // during a rerack when there is no memory left to size them with.
+    // Drop a pile once, out of sight, so Bullet sizes its solver arrays now rather than during a
+    // rerack when there is no memory left to size them with.
+    //
+    // The bodies dropped here are throwaways, not the game's discs.
+    //
+    // This used to warm up by dropping the real disc pool and switching it off again, which meant
+    // every disc had been simulated, stopped and re-released before the game ever started. That
+    // left each one carrying state from the warm-up into its first real rerack -- an existing rigid
+    // body rather than a fresh one, a mass that no longer counted as a change, whatever inertia it
+    // was last given -- and the rerack was reported as having looked livelier before the warm-up
+    // was added. Nothing about reserving memory requires touching the pieces the game plays with.
     {
-        const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
-                                glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
+        World* warmUpWorld = GetWorld(0);
+        Node* warmUpRootNode = warmUpWorld ? warmUpWorld->GetRootNode() : nullptr;
+        Node3D* warmUpParent = warmUpRootNode ? warmUpRootNode->As<Node3D>() : nullptr;
 
-        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        if (warmUpParent != nullptr)
         {
-            Disc& disc = mDiscs[i];
-
-            if (disc.mNode == nullptr)
-            {
-                continue;
-            }
-
-            // A plausible heap, not a manufactured worst case.
-            //
-            // An earlier version packed them deliberately overlapping to force the solver to
-            // reserve for the worst tangle imaginable. It did exactly that, and asked for more
-            // memory than the machine has -- it crashed during the warm-up itself, having made the
-            // problem it was meant to solve twice as large.
-            //
-            // Three narrow columns: they collapse into each other on the way down and settle into
-            // something like the pile a rerack makes, which is what needs to fit.
-            const float across = mDiscRadius * 0.7f;
-            const glm::vec3 offset(((i % 3) - 1) * across,
-                                   mDiscRadius * 1.1f * float(i / 3),
-                                   (((i / 3) % 3) - 1) * across);
-
-            disc.mInUse = true;
-            disc.mFrom = glm::vec3(0.0f);
-            disc.mNode->SetWorldPosition(above + offset);
-            disc.mNode->SetVisible(false);
+            mWarmUpRoot = warmUpParent->CreateChild<Node3D>();
         }
 
-        StartDiscPhysics();
-
-        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+        if (mWarmUpRoot != nullptr)
         {
-            if (mDiscs[i].mAwaitingRelease)
-            {
-                ReleaseDisc(mDiscs[i], i);
-            }
-        }
+            mWarmUpRoot->SetName("SolverWarmUp");
 
-        // Stay invisible through all of it.
-        for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
-        {
-            if (mDiscs[i].mNode != nullptr)
-            {
-                mDiscs[i].mNode->SetVisible(false);
-            }
-        }
+            const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
+                                    glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
 
-        mWarmUpFrames = kWarmUpFrames;
+            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+            {
+                Box3D* body = mWarmUpRoot->CreateChild<Box3D>();
+
+                if (body == nullptr)
+                {
+                    continue;
+                }
+
+                // Disc-sized, because what has to fit is the number of contact points a pile of
+                // this many objects of this size generates, and that follows from the size.
+                body->SetExtents(glm::vec3(mDiscRadius, mDiscHalfThickness, mDiscRadius));
+
+                // A plausible heap, not a manufactured worst case.
+                //
+                // An earlier version packed them deliberately overlapping to force the solver to
+                // reserve for the worst tangle imaginable. It did exactly that, and asked for more
+                // memory than the machine has -- it crashed during the warm-up itself, having made
+                // the problem it was meant to solve twice as large.
+                //
+                // Three narrow columns: they collapse into each other on the way down and settle
+                // into something like the pile a rerack makes, which is what needs to fit.
+                const float across = mDiscRadius * 0.7f;
+                const glm::vec3 offset(((i % 3) - 1) * across,
+                                       mDiscRadius * 1.1f * float(i / 3),
+                                       (((i / 3) % 3) - 1) * across);
+
+                body->SetWorldPosition(above + offset);
+
+                body->SetMass(kDiscMass);
+                body->SetFriction(0.5f);
+                body->SetRestitution(0.35f);
+
+                body->SetCollisionGroup(kRerackColGroup);
+                body->SetCollisionMask(kRerackColGroup);
+
+                body->EnableCollision(true);
+                body->EnablePhysics(true);
+
+                body->SetVisible(false);
+            }
+
+            mWarmUpFrames = kWarmUpFrames;
+        }
     }
 
     OctLog("Connect4: scene ready");
@@ -1395,32 +1412,13 @@ void Connect4Scene::WarmUpSolver()
         return;
     }
 
-    // Done: put everything back as it was. The discs were never visible and the board has not
-    // started, so nothing here is observable except the memory that is now reserved.
-    for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
+    // Done: throw the pile away. The solver arrays it grew are the world's and are never shrunk,
+    // so the reservation outlives the bodies that caused it -- which is the entire point.
+    if (mWarmUpRoot != nullptr)
     {
-        Disc& disc = mDiscs[i];
-
-        if (disc.mNode != nullptr)
-        {
-            disc.mNode->EnablePhysics(false);
-            disc.mNode->EnableCollision(false);
-            disc.mNode->SetVisible(false);
-
-            // Back to the orientation the chip was placed at. The warm-up flings them about, and
-            // without this they return to the pool holding whatever angle they were thrown into --
-            // so the first discs of the game appeared in their slots tilted.
-            disc.mNode->SetRotation(mDiscRotation);
-        }
-
-        disc.mInUse = false;
-        disc.mAwaitingRelease = false;
-        disc.mSlowTime = 0.0f;
-        disc.mLiveTime = 0.0f;
-        disc.mFlatT = -1.0f;
+        mWarmUpRoot->DestroyDeferred();
+        mWarmUpRoot = nullptr;
     }
-
-    mDiscPhysicsRunning = false;
 
     LogDebug("C4: solver warm-up done");
 }
