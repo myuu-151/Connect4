@@ -105,6 +105,11 @@ const float kDiscRetireTime = 0.5f;
 // The longest any disc is simulated for. A backstop against one that never settles.
 const float kDiscMaxLiveTime = 8.0f;
 
+// How hard a disc left standing on its edge is nudged over, in radians per second. Only enough to
+// get it past its balance point -- gravity is what actually tips it, which is the whole point of
+// doing this rather than rotating it by hand.
+const float kToppleNudge = 2.2f;
+
 // How many discs are simulated at once.
 //
 // Not a performance figure but a memory limit. Bullet allocates solver bodies and contact arrays
@@ -1536,6 +1541,11 @@ void Connect4Scene::RetireDisc(Disc& disc)
     disc.mNode->EnablePhysics(false);
 
     // Near enough flat already: leave it exactly where the simulation put it.
+    //
+    // This is now the last resort rather than the usual path. A disc that stops on its edge is
+    // nudged over and allowed to fall properly; it only reaches here if it has been simulated for
+    // as long as it is going to be and is still not down, in which case being laid flat is better
+    // than being left standing.
     if (uprightness > 0.85f)
     {
         return;
@@ -1622,15 +1632,49 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
         // it was a moment ago, does not care about that.
         const glm::vec3 now = disc.mNode->GetWorldPosition();
 
-        if (glm::distance(now, disc.mCheckPos) < worthwhileTravel)
-        {
-            RetireDisc(disc);
-        }
-        else
+        if (glm::distance(now, disc.mCheckPos) >= worthwhileTravel)
         {
             disc.mCheckPos = now;
             disc.mSlowTime = 0.0f;
+            continue;
         }
+
+        // It has stopped going anywhere. If it stopped while still up on its edge, tip it over
+        // rather than retiring it there.
+        //
+        // It used to be laid flat by hand: taken out of the simulation and rotated onto its face
+        // over a fixed time. That reads as an animation rather than a fall, because it is one --
+        // every disc turning at the same rate through the same arc and arriving without a bounce.
+        //
+        // A nudge is enough instead. Past the balance point gravity does the rest, and what comes
+        // out is a real topple: it accelerates as it goes over, lands on its face, and settles
+        // against whatever is beside it.
+        glm::vec3 localNormal(0.0f);
+        localNormal[glm::clamp(mDiscFaceAxis, 0, 2)] = 1.0f;
+
+        const glm::vec3 normal = disc.mNode->GetWorldRotationQuat() * localNormal;
+        const float uprightness = glm::abs(normal.y);
+
+        const bool onEdge = (uprightness < 0.55f);
+        const bool onTable = (now.y < mTableY + mDiscRadius * 1.25f);
+
+        if (onEdge && onTable && disc.mLiveTime < kDiscMaxLiveTime * 0.75f)
+        {
+            // About the axis that carries its face towards vertical, which is the way it is
+            // already leaning, so it goes over the shortest way.
+            glm::vec3 axis = glm::cross(normal, glm::vec3(0.0f, 1.0f, 0.0f));
+
+            if (glm::length(axis) > 0.001f)
+            {
+                disc.mNode->AddAngularVelocity(glm::normalize(axis) * kToppleNudge);
+            }
+
+            // It is doing something again, so start the clock over.
+            disc.mSlowTime = 0.0f;
+            continue;
+        }
+
+        RetireDisc(disc);
     }
 }
 
