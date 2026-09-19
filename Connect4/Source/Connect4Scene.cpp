@@ -607,11 +607,17 @@ bool Connect4Scene::Initialize()
     mSlotBeginSound = LoadAsset<SoundWave>("slot_begin");
     mSlotEndSound = LoadAsset<SoundWave>("slot_end");
 
-    // rerack2 rather than rerack: mono at 22 kHz instead of stereo at 44, which is a quarter of
-    // the decoded PCM for a clatter nobody is listening to closely. The original ran the machine
-    // out of memory -- what costs is the decoded size, not the file, and these are the last assets
-    // loaded, so they are the ones that find nothing left.
-    mRerackSound = LoadAsset<SoundWave>("rerack2");
+    // rerack3, falling back through the earlier takes if it is not there.
+    //
+    // Not the original rerack unless nothing else can be found: it is stereo at 44 kHz, and what
+    // costs here is decoded PCM rather than file size. These are the last assets loaded, so they
+    // are the ones that find nothing left -- the original ran the machine out of memory.
+    mRerackSound = LoadAsset<SoundWave>("rerack3");
+
+    if (mRerackSound == nullptr)
+    {
+        mRerackSound = LoadAsset<SoundWave>("rerack2");
+    }
 
     if (mRerackSound == nullptr)
     {
