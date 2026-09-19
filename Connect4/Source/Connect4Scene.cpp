@@ -164,7 +164,7 @@ const float kToppleAccel = 4.0f;
 // If a full board starts crashing again, this is the number to lower -- but the real fix is to stop
 // large textures sitting in memory as RGBA8 when RGB5A3 holds them at half the size with their
 // alpha intact.
-const uint32_t kMaxLiveDiscs = 20;
+const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
 
 // How many frames the startup warm-up runs for.
 const int32_t kWarmUpFrames = 45;
@@ -1441,6 +1441,16 @@ void Connect4Scene::StartDiscPhysics()
         solverInfo.m_numIterations = 4;
     }
 
+    // No overlap or collision callbacks in this game.
+    //
+    // Octave runs a second, complete narrowphase pass every frame on top of the one inside
+    // stepSimulation, purely so that BeginOverlap and collision handlers can be raised. Nothing
+    // here listens for either, and at a full board that pass was measured at 9-16ms of the frame.
+    if (world != nullptr)
+    {
+        world->EnableCollisionEvents(false);
+    }
+
     mDiscPhysicsRunning = true;
 }
 
@@ -1877,6 +1887,19 @@ void Connect4Scene::TipOverIfStanding(float deltaTime)
         // Still travelling: leave it alone. A disc rolling away on its edge is supposed to be on
         // its edge, and tipping it over mid-roll would be the same mistake as animating it flat.
         if (glm::length(disc.mNode->GetLinearVelocity()) > goingNowhere)
+        {
+            continue;
+        }
+
+        // Leave sleeping discs alone.
+        //
+        // AddAngularVelocity activates whatever it touches, so nudging a disc that has already
+        // settled wakes it and puts it straight back into the solver -- and this runs every frame,
+        // so between them they can keep a pile awake indefinitely. Sleeping is what makes a full
+        // board affordable, and this was quietly working against it.
+        btRigidBody* sleepCheck = disc.mNode->GetRigidBody();
+
+        if (sleepCheck != nullptr && !sleepCheck->isActive())
         {
             continue;
         }
