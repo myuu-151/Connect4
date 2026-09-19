@@ -1548,19 +1548,22 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
         // parameter for that case and it was simply never set.
         body->setSpinningFriction(0.08f);
 
-        // Never let Bullet put these to sleep.
+        // Sleep thresholds sized to the disc, not to Bullet's idea of a metre.
         //
-        // A sleeping body stops being simulated and ignores anything done to it, and the threshold
-        // for sleeping was above the speeds at which a pile actually settles -- so discs were
-        // dropping below it while still resolving against each other and freezing exactly as they
-        // were, half settled, in poses nothing would hold. It also swallowed the torque meant to
-        // tip a standing disc over, leaving it to be laid flat by hand.
+        // Bullet sleeps a body once it stays under a speed threshold for a couple of seconds, and
+        // the defaults -- 0.8 units per second of travel, 1.0 radians per second of turn -- assume
+        // a world measured in metres. A disc here is about fifteen thousandths of a unit across, so
+        // the default threshold is some fifty disc-radii per second: near enough everything counts
+        // as stationary. Discs fell asleep while still resolving against each other, froze half
+        // settled in poses nothing would hold, and ignored the torque meant to tip them over.
         //
-        // There is already a mechanism for deciding a disc has finished: it is retired when it
-        // stops going anywhere, which is measured over a couple of seconds rather than from an
-        // instantaneous speed. Two systems deciding the same thing, on different evidence, is what
-        // produced the odd poses -- so only one of them keeps the job.
-        body->setActivationState(DISABLE_DEACTIVATION);
+        // That was previously worked around by never letting them sleep at all, which is what kept
+        // all forty-two in the solver for the whole rerack and is most of what the rerack costs at
+        // a full board. Scaling the thresholds fixes the freezing and lets a settled pile drop out
+        // of the simulation, which are the same thing looked at from either end.
+        body->setSleepingThresholds(mDiscRadius * 0.6f, 0.5f);
+        body->setActivationState(ACTIVE_TAG);
+        body->activate(true);
 
         // Sweep the disc along its path instead of testing where it lands.
         //
@@ -1760,6 +1763,37 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
 
         disc.mSlowTime += deltaTime;
         disc.mLiveTime += deltaTime;
+
+        btRigidBody* body = disc.mNode->GetRigidBody();
+
+        if (body != nullptr)
+        {
+            // Asleep means Bullet has decided it is finished, on two seconds of evidence. Retiring
+            // it takes it out of the world entirely rather than leaving it in the island as a
+            // sleeping body the solver still has to consider.
+            if (!body->isActive())
+            {
+                RetireDisc(disc);
+                continue;
+            }
+
+            // Swept collision only while it is actually moving fast enough to need it.
+            //
+            // CCD is what stops a disc passing through another during the fall, when it covers
+            // several times its own thickness in a step. A disc shuffling about in a settled pile
+            // covers none of that and gains nothing from the sweep, but pays for it every step --
+            // and at a full board most of the discs are in that state most of the time.
+            const float speed = glm::length(disc.mNode->GetLinearVelocity());
+
+            if (speed < mDiscHalfThickness * 30.0f)
+            {
+                body->setCcdMotionThreshold(0.0f);
+            }
+            else
+            {
+                body->setCcdMotionThreshold(mDiscHalfThickness);
+            }
+        }
 
         // Anything still going after this long is not going to settle. A disc spinning on its edge
         // can keep itself alive indefinitely, and there is no arrangement of friction and damping
