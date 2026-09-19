@@ -168,7 +168,6 @@ const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
 // How many frames the startup warm-up runs for.
 // Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
 // still in the air, touching nothing, when it is switched off again.
-const int32_t kWarmUpFrames = 45;
 
 // How long a retired disc takes to fall flat.
 const float kRetireToppleTime = 0.28f;
@@ -732,79 +731,6 @@ bool Connect4Scene::Initialize()
 
     mReady = true;
 
-    // Drop a pile once, out of sight, so Bullet sizes its solver arrays now rather than during a
-    // rerack when there is no memory left to size them with.
-    //
-    // The bodies dropped here are throwaways, not the game's discs.
-    //
-    // This used to warm up by dropping the real disc pool and switching it off again, which meant
-    // every disc had been simulated, stopped and re-released before the game ever started. That
-    // left each one carrying state from the warm-up into its first real rerack -- an existing rigid
-    // body rather than a fresh one, a mass that no longer counted as a change, whatever inertia it
-    // was last given -- and the rerack was reported as having looked livelier before the warm-up
-    // was added. Nothing about reserving memory requires touching the pieces the game plays with.
-    {
-        World* warmUpWorld = GetWorld(0);
-        Node* warmUpRootNode = warmUpWorld ? warmUpWorld->GetRootNode() : nullptr;
-        Node3D* warmUpParent = warmUpRootNode ? warmUpRootNode->As<Node3D>() : nullptr;
-
-        if (warmUpParent != nullptr)
-        {
-            mWarmUpRoot = warmUpParent->CreateChild<Node3D>();
-        }
-
-        if (mWarmUpRoot != nullptr)
-        {
-            mWarmUpRoot->SetName("SolverWarmUp");
-
-            const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
-                                    glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
-
-            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
-            {
-                Box3D* body = mWarmUpRoot->CreateChild<Box3D>();
-
-                if (body == nullptr)
-                {
-                    continue;
-                }
-
-                // Disc-sized, because what has to fit is the number of contact points a pile of
-                // this many objects of this size generates, and that follows from the size.
-                body->SetExtents(glm::vec3(mDiscRadius, mDiscHalfThickness, mDiscRadius));
-
-                // A plausible heap, not a manufactured worst case.
-                //
-                // An earlier version packed them deliberately overlapping to force the solver to
-                // reserve for the worst tangle imaginable. It did exactly that, and asked for more
-                // memory than the machine has -- it crashed during the warm-up itself, having made
-                // the problem it was meant to solve twice as large.
-                //
-                // Three narrow columns: they collapse into each other on the way down and settle
-                // into something like the pile a rerack makes, which is what needs to fit.
-                const float across = mDiscRadius * 0.7f;
-                const glm::vec3 offset(((i % 3) - 1) * across,
-                                       mDiscRadius * 1.1f * float(i / 3),
-                                       (((i / 3) % 3) - 1) * across);
-
-                body->SetWorldPosition(above + offset);
-
-                body->SetMass(kDiscMass);
-                body->SetFriction(0.5f);
-                body->SetRestitution(0.35f);
-
-                body->SetCollisionGroup(kRerackColGroup);
-                body->SetCollisionMask(kRerackColGroup);
-
-                body->EnableCollision(true);
-                body->EnablePhysics(true);
-
-                body->SetVisible(false);
-            }
-
-            mWarmUpFrames = kWarmUpFrames;
-        }
-    }
 
     OctLog("Connect4: scene ready");
     return true;
@@ -1041,14 +967,6 @@ void Connect4Scene::Update(float deltaTime)
     // Outside the rerack's phases on purpose. The discs are left simulating once it has nominally
     // finished so the result can be watched for as long as anyone likes, which means stragglers
     // still have to be retired and laid down after the phases are over.
-    // Before anything else: while this is running the discs are not the game's, they are a heap
-    // being dropped to make Bullet allocate.
-    if (mWarmUpFrames > 0)
-    {
-        WarmUpSolver();
-        return;
-    }
-
     UpdateDiscRelease();
     TipOverIfStanding(deltaTime);
     UpdateDiscRetirement(deltaTime);
@@ -1383,44 +1301,51 @@ void Connect4Scene::StartDiscPhysics()
 //
 // Lowest first, so the board empties from the bottom the way a real one does, and so the discs
 // already on the table are the ones supporting whatever comes down next.
-// Make Bullet reserve the solver memory a full rerack needs, while the game is still loading.
+// Debug: put a disc in every cell so a full rerack can be watched on demand.
 //
-// A rerack used to crash: the solver allocates its arrays from the number of bodies in an island,
-// a heap of discs settling together is one island, and somewhere around thirty-nine of them the
-// allocation failed -- silently, by writing through a null pointer. The machine is at its memory
-// ceiling by the time a game is running, and worse, the heap is fragmented by everything the scene
-// loaded, so a single large contiguous request can fail with plenty of total memory free.
-//
-// The arrays grow and are never shrunk, so if they are grown once while memory is still clean the
-// capacity is there for the rest of the session and a rerack never has to allocate at all.
-//
-// It has to be a real pile. Islands are built from contact manifolds, so bodies that are not
-// touching produce no island and the solver reserves nothing -- warming up during the lift, while
-// the discs are still sitting apart in their slots, would have allocated nothing at all. So every
-// disc is genuinely dropped into a heap here, invisibly, and switched off again a few frames later.
-void Connect4Scene::WarmUpSolver()
+// Reaching a full board by playing takes forty-two moves and a game that ends in a draw, which is
+// no way to look at the heaviest thing the simulation ever does.
+void Connect4Scene::FillBoardForDebug()
 {
-    if (mWarmUpFrames <= 0)
+    if (!mReady)
     {
         return;
     }
 
-    mWarmUpFrames--;
+    ClearDiscs();
 
-    if (mWarmUpFrames > 0)
+    uint32_t index = 0;
+
+    for (uint32_t col = 0; col < C4::kCols; ++col)
     {
-        return;
-    }
+        for (uint32_t row = 0; row < C4::kRows; ++row)
+        {
+            if (index >= C4::kCols * C4::kRows)
+            {
+                break;
+            }
 
-    // Done: throw the pile away. The solver arrays it grew are the world's and are never shrunk,
-    // so the reservation outlives the bodies that caused it -- which is the entire point.
-    if (mWarmUpRoot != nullptr)
-    {
-        mWarmUpRoot->DestroyDeferred();
-        mWarmUpRoot = nullptr;
-    }
+            Disc& disc = mDiscs[index];
 
-    LogDebug("C4: solver warm-up done");
+            if (disc.mNode == nullptr)
+            {
+                ++index;
+                continue;
+            }
+
+            // Straight into the slot: no entry point, no fall, no animation to wait through.
+            disc.mInUse = true;
+            disc.mTo = mLayout.GetStillPoint(col, row);
+            disc.mFrom = disc.mTo;
+
+            disc.mNode->SetMaterialOverride(GetDiscMaterial(((col + row) & 1) ? C4::Cell::Red : C4::Cell::Yellow));
+            disc.mNode->SetWorldPosition(disc.mTo);
+            disc.mNode->SetRotation(mDiscRotation);
+            disc.mNode->SetVisible(true);
+
+            ++index;
+        }
+    }
 }
 
 void Connect4Scene::UpdateDiscRelease()
@@ -2190,17 +2115,6 @@ void Connect4Scene::BeginRerack()
 
 void Connect4Scene::ClearDiscs()
 {
-    // Not while the warm-up is running.
-    //
-    // The game calls NewGame as soon as the scene is initialised, and NewGame clears the discs --
-    // which would switch off the heap that has just been dropped, before a single frame of it had
-    // been simulated. The warm-up would then run its frames with nothing in the world and reserve
-    // nothing, while reporting that it had finished.
-    if (mWarmUpFrames > 0)
-    {
-        return;
-    }
-
     // Nothing should still be simulated once the discs are back in the pool.
     StopDiscPhysics();
 

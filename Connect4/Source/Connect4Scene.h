@@ -76,10 +76,6 @@ public:
 
     bool IsReady() const { return mReady; }
 
-    // True while the startup warm-up is running. The game waits for it, so that a disc cannot be
-    // slotted before the solver has the memory a rerack will need.
-    bool IsWarmingUp() const { return mWarmUpFrames > 0; }
-
     void Update(float deltaTime);
 
     // --- cursor -------------------------------------------------------------
@@ -99,6 +95,9 @@ public:
     // --- whole board --------------------------------------------------------
     void HighlightWin(const C4::Move* winLine);
     void BeginRerack();
+
+    // Debug: fill every cell with a disc so a rerack can be watched at full load on demand.
+    void FillBoardForDebug();
     bool IsRerackAnimating() const { return mRerackPhase != RerackPhase::Idle; }
     void ClearDiscs();
 
@@ -133,9 +132,6 @@ private:
     void TipOverIfStanding(float deltaTime);
     void UpdateDiscRelease();
 
-    // Makes Bullet reserve, while the game is still loading, the solver memory a full rerack will
-    // need. See the definition for why it has to be done this way.
-    void WarmUpSolver();
 
     Connect4Layout mLayout;
 
@@ -245,11 +241,6 @@ private:
 
     bool mDiscPhysicsRunning = false;
 
-    // Counts down the frames of the startup warm-up. Zero once it is done.
-    int32_t mWarmUpFrames = 0;
-
-    // Parent of the throwaway bodies the warm-up drops. Destroyed when it finishes.
-    Node3D* mWarmUpRoot = nullptr;
     bool mRerackSoundPlayed = false;
 
     // The solver setting in force before the rerack, put back afterwards.
