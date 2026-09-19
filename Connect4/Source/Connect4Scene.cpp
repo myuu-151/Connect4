@@ -1522,10 +1522,19 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
         // parameter for that case and it was simply never set.
         body->setSpinningFriction(0.08f);
 
-        // Let them go to sleep. Bullet's defaults are sized for a world measured in metres,
-        // and the board is centimetres across, so a disc drifting far too slowly to see never
-        // came near the threshold and stayed awake indefinitely.
-        body->setSleepingThresholds(spacing * 0.6f, 0.8f);
+        // Never let Bullet put these to sleep.
+        //
+        // A sleeping body stops being simulated and ignores anything done to it, and the threshold
+        // for sleeping was above the speeds at which a pile actually settles -- so discs were
+        // dropping below it while still resolving against each other and freezing exactly as they
+        // were, half settled, in poses nothing would hold. It also swallowed the torque meant to
+        // tip a standing disc over, leaving it to be laid flat by hand.
+        //
+        // There is already a mechanism for deciding a disc has finished: it is retired when it
+        // stops going anywhere, which is measured over a couple of seconds rather than from an
+        // instantaneous speed. Two systems deciding the same thing, on different evidence, is what
+        // produced the odd poses -- so only one of them keeps the job.
+        body->setActivationState(DISABLE_DEACTIVATION);
 
         // Sweep the disc along its path instead of testing where it lands.
         //
@@ -1838,10 +1847,7 @@ bool Connect4Scene::AreDiscsAsleep() const
             return false;
         }
 
-        // Turning counts as moving. Asking only about linear speed called a disc spinning on the
-        // spot settled, which ended the fall while it was still going -- and with the fall over,
-        // the damping that would have stopped it stopped running too. It then span until the discs
-        // were cleared, which is exactly what it looked like.
+        // Turning counts as moving, not just travelling.
         if (glm::length(disc.mNode->GetAngularVelocity()) > spinThreshold)
         {
             return false;
