@@ -1479,6 +1479,19 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     disc.mNode->EnableCollision(true);
     disc.mNode->EnablePhysics(true);
 
+    // A brand new rigid body, every time.
+    //
+    // The discs are a pool: the same forty-two nodes are reused for every rerack. Octave creates a
+    // rigid body once and then keeps it, so enabling physics again hands the disc back the body it
+    // finished the last rerack with -- its mass and inertia, its damping, its sleeping state and
+    // whatever it had accumulated -- and several of the setters above quietly do nothing when the
+    // value has not changed from last time.
+    //
+    // The result was that the first rerack of a session looked like physics and every one after it
+    // was stiff. That is also exactly what the startup solver warm-up used to do to the very first
+    // rerack, by simulating every disc once before the game began.
+    disc.mNode->RecreateRigidBody();
+
     // Start the body where the node already is, rather than wherever it was when the body was
     // last created.
     disc.mNode->FullSyncRigidBodyTransform();
