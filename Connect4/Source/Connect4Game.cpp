@@ -1,8 +1,5 @@
 #include "Connect4Game.h"
 
-#include "Renderer.h"
-#include "Nodes/Widgets/StatsOverlay.h"
-
 #include "InputDevices.h"
 #include "Log.h"
 
@@ -108,29 +105,6 @@ void Connect4Game::Update(float deltaTime)
     {
         mLoggedFirstFrame = true;
         OctLog("Connect4: first frame");
-    }
-
-    // Debug: Z toggles the engine's stats overlay.
-    //
-    // The rerack costs framerate in proportion to the number of discs, and the question of where
-    // that goes is answerable rather than arguable -- the profiler is compiled into console builds
-    // and breaks the frame down by subsystem, so Physics against Render settles it on the hardware
-    // instead of by reasoning about it.
-    if (IsGamepadButtonJustDown(GAMEPAD_Z, kPad))
-    {
-        Renderer* renderer = Renderer::Get();
-
-        if (renderer != nullptr)
-        {
-            const bool showing = renderer->IsStatsOverlayEnabled();
-
-            if (!showing && renderer->GetStatsWidget() != nullptr)
-            {
-                renderer->GetStatsWidget()->SetDisplayMode(StatDisplayMode::CpuStatText);
-            }
-
-            renderer->EnableStatsOverlay(!showing);
-        }
     }
 
     // Debug: B fills the board and reracks it, from any state.

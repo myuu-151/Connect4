@@ -1,7 +1,5 @@
 #pragma once
 
-#include "BulletCollision/CollisionShapes/btConvexHullShape.h"
-
 #include <stdint.h>
 
 #include "Board.h"
@@ -100,7 +98,6 @@ public:
 
     // Debug: fill every cell with a disc so a rerack can be watched at full load on demand.
     void FillBoardForDebug();
-
     bool IsRerackAnimating() const { return mRerackPhase != RerackPhase::Idle; }
     void ClearDiscs();
 
@@ -134,9 +131,6 @@ private:
     void UpdateDiscRetirement(float deltaTime);
     void TipOverIfStanding(float deltaTime);
     void UpdateDiscRelease();
-
-    // The disc collision shape. One per body, since a primitive owns and frees its own.
-    btConvexHullShape* MakeDiscShape(float uniformScale) const;
 
 
     Connect4Layout mLayout;
@@ -246,7 +240,6 @@ private:
     Box3D* mFootColliders[2] = { nullptr, nullptr };
 
     bool mDiscPhysicsRunning = false;
-
 
     bool mRerackSoundPlayed = false;
 

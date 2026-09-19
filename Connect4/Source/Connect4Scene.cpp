@@ -16,9 +16,8 @@
 #include "Nodes/3D/Camera3d.h"
 #include "Nodes/3D/Box3d.h"
 
-#include "BulletCollision/CollisionShapes/btConvexHullShape.h"
+#include "BulletCollision/CollisionShapes/btCylinderShape.h"
 #include "BulletCollision/CollisionShapes/btConvexInternalShape.h"
-#include "BulletCollision/CollisionShapes/btPolyhedralConvexShape.h"
 
 #include <math.h>
 
@@ -165,9 +164,6 @@ const float kToppleAccel = 4.0f;
 // large textures sitting in memory as RGBA8 when RGB5A3 holds them at half the size with their
 // alpha intact.
 const uint32_t kMaxLiveDiscs = C4::kCols * C4::kRows;
-
-// How many frames the startup warm-up runs for.
-const int32_t kWarmUpFrames = 45;
 
 // How many frames the startup warm-up runs for.
 // Long enough for the heap to actually form and its contacts to peak. Too few and the discs are
@@ -736,118 +732,6 @@ bool Connect4Scene::Initialize()
 
     mReady = true;
 
-    // Grow Bullet's pools now, while memory is still clean.
-    //
-    // The solver and the contact clipping allocate as the pile gets tangled, and they ask for large
-    // contiguous blocks. By the time a game has been running the heap is fragmented by everything
-    // the scene loaded, so a block that would have been there at startup is not -- and Bullet does
-    // not check: btAlignedAllocDefault returns null and the next write goes through it. That is the
-    // DSI at DAR 00000000, and it took six reracks to turn up because the heap gets dirtier each
-    // time.
-    //
-    // These arrays are grown once and never shrunk, so growing them here means a rerack never has
-    // to allocate at all.
-    //
-    // The bodies dropped here are throwaways, never the game's discs. Dropping the real pool and
-    // switching it off again left every disc carrying warm-up state into its first rerack, which is
-    // why the rerack used to look stiff.
-    {
-        World* warmUpWorld = GetWorld(0);
-        Node* warmUpRootNode = warmUpWorld ? warmUpWorld->GetRootNode() : nullptr;
-        Node3D* warmUpParent = warmUpRootNode ? warmUpRootNode->As<Node3D>() : nullptr;
-        Node3D* mWarmUpRoot = nullptr;
-
-        if (warmUpParent != nullptr)
-        {
-            mWarmUpRoot = warmUpParent->CreateChild<Node3D>();
-        }
-
-        if (mWarmUpRoot != nullptr)
-        {
-            mWarmUpRoot->SetName("SolverWarmUp");
-
-            const glm::vec3 above = mLayout.GetStillPoint(C4::kCols / 2, C4::kRows - 1) +
-                                    glm::vec3(0.0f, mLayout.GetRowSpacing() * 2.0f, 0.0f);
-
-            for (uint32_t i = 0; i < C4::kCols * C4::kRows; ++i)
-            {
-                Box3D* body = mWarmUpRoot->CreateChild<Box3D>();
-
-                if (body == nullptr)
-                {
-                    continue;
-                }
-
-                // The disc's own shape, so the polyhedral clipping allocates for the pairs it will
-                // actually see rather than for boxes.
-                body->SetCollisionShape(MakeDiscShape(1.0f));
-
-                // Three narrow columns: they collapse into each other on the way down and settle
-                // into something like the pile a rerack makes, which is what has to fit. An earlier
-                // version packed them deliberately overlapping to force the worst tangle
-                // imaginable, and asked for more memory than the machine has -- it crashed during
-                // the warm-up itself.
-                const float across = mDiscRadius * 0.7f;
-                const glm::vec3 offset(((i % 3) - 1) * across,
-                                       mDiscRadius * 1.1f * float(i / 3),
-                                       (((i / 3) % 3) - 1) * across);
-
-                body->SetWorldPosition(above + offset);
-
-                body->SetMass(kDiscMass);
-                body->SetFriction(0.5f);
-                body->SetRestitution(0.35f);
-
-                body->SetCollisionGroup(kRerackColGroup);
-                body->SetCollisionMask(kRerackColGroup);
-
-                body->EnableCollision(true);
-                body->EnablePhysics(true);
-
-                body->SetVisible(false);
-            }
-
-            // Step it here, while the loading screen is still up.
-            //
-            // This used to run over its first forty-five frames of gameplay, which meant the scene
-            // appeared and then stuttered through the warm-up in front of the player. Loading is
-            // synchronous, so the simulation can simply be stepped in this loop instead and the
-            // whole thing is finished before the first frame of the game is drawn.
-            btDynamicsWorld* dynamicsWorld = warmUpWorld->GetDynamicsWorld();
-            Renderer* renderer = Renderer::Get();
-
-            for (int32_t frame = 0; frame < kWarmUpFrames && dynamicsWorld != nullptr; ++frame)
-            {
-                dynamicsWorld->stepSimulation(1.0f / 60.0f, 1, 1.0f / 60.0f);
-
-                // Keep the loading screen alive, since nothing else is pumping frames in here.
-                if (renderer != nullptr)
-                {
-                    renderer->DrawLoadingFrame(0.9f + 0.1f * (float(frame) / float(kWarmUpFrames)),
-                                               "Preparing physics");
-                }
-            }
-
-            // Take them out of the world before they go, rather than leaving bodies in it for a
-            // deferred destroy to catch later.
-            for (uint32_t i = 0; i < mWarmUpRoot->GetNumChildren(); ++i)
-            {
-                Primitive3D* body = mWarmUpRoot->GetChild(i)->As<Primitive3D>();
-
-                if (body != nullptr)
-                {
-                    body->EnablePhysics(false);
-                    body->EnableCollision(false);
-                }
-            }
-
-            mWarmUpRoot->Destroy();
-            mWarmUpRoot = nullptr;
-
-            LogDebug("C4: solver warm-up done");
-        }
-    }
-
 
     OctLog("Connect4: scene ready");
     return true;
@@ -1322,17 +1206,6 @@ void Connect4Scene::BuildPhysicsColliders()
 
             convex->setMargin(newMargin);
             convex->setImplicitShapeDimensions(trueHalfExtents - btVector3(newMargin, newMargin, newMargin));
-
-            // And give the box a convex polyhedron, so disc against table takes the same
-            // separating-axis path the discs take against each other rather than dropping back to
-            // GJK. A box is already a polyhedron; it simply is not asked to describe itself as one
-            // unless someone does this.
-            btPolyhedralConvexShape* polyhedral = dynamic_cast<btPolyhedralConvexShape*>(convex);
-
-            if (polyhedral != nullptr)
-            {
-                polyhedral->initializePolyhedralFeatures();
-            }
         }
 
         // Present for collision only; there is already a table and a stand to look at.
@@ -1419,36 +1292,7 @@ void Connect4Scene::StartDiscPhysics()
         btContactSolverInfo& solverInfo = world->GetDynamicsWorld()->getSolverInfo();
 
         mSavedSolverIterations = solverInfo.m_numIterations;
-
-        // Settle quickly enough to be worth having.
-        //
-        // Bullet sleeps a body after it has held still for gDeactivationTime, which defaults to two
-        // seconds of simulated time. In a rerack that is running behind real time that is a very
-        // long wait, and a disc that has plainly finished goes on being solved for all of it.
-        // Sleeping is the mechanism that makes a full board affordable -- the pile settles from the
-        // bottom and each disc leaves the solver as it comes to rest -- so it has to happen while
-        // there is still something left to save.
-        gDeactivationTime = 0.4f;
-
-        // Four while the rerack runs.
-        //
-        // The solver's cost is iterations times constraints times substeps, and a full board is
-        // 165ms of a 199ms frame -- measured, with collision detection accounting for only 15ms of
-        // it, so this is where the time goes. Eight was chosen to stop a loosely-solved pile from
-        // sinking into itself, back when the discs were colliding as rounded blobs and no number of
-        // iterations could have stacked them properly. With the collision margins fixed the pile
-        // holds together at four, and four costs half as much.
-        solverInfo.m_numIterations = 4;
-    }
-
-    // No overlap or collision callbacks in this game.
-    //
-    // Octave runs a second, complete narrowphase pass every frame on top of the one inside
-    // stepSimulation, purely so that BeginOverlap and collision handlers can be raised. Nothing
-    // here listens for either, and at a full board that pass was measured at 9-16ms of the frame.
-    if (world != nullptr)
-    {
-        world->EnableCollisionEvents(false);
+        solverInfo.m_numIterations = 8;
     }
 
     mDiscPhysicsRunning = true;
@@ -1559,72 +1403,6 @@ void Connect4Scene::UpdateDiscRelease()
     }
 }
 
-// The disc collision shape: an eight-sided prism as a convex hull, with its polyhedral features
-// built so that disc-against-disc takes Bullet's separating-axis and face-clipping path.
-//
-// It was a btCylinderShape, and that is what a full rerack cost. Cylinder against cylinder goes
-// through GJK, and an overlap deep enough to need a penetration depth falls into EPA -- expensive,
-// and it yields a single contact point per pair per step, so a pile pays for EPA on every pair
-// every step and then needs many solver iterations to accumulate enough points to stack at all.
-// Measured: halving the solver iterations barely moved the frame time, which places the cost in
-// generating contacts rather than solving them.
-//
-// The polyhedral path produces a complete manifold in one shot with no EPA anywhere, but it is not
-// free in memory: every shape carries its own polyhedron, and the clipping allocates while it runs.
-// Eight sides rather than twelve keeps that down -- a disc spends most of its time lying flat, and
-// the facets only show when one rolls on its rim.
-//
-// One shape per body: a primitive owns its collision shape and frees it, so these cannot be shared.
-btConvexHullShape* Connect4Scene::MakeDiscShape(float uniformScale) const
-{
-    const uint32_t kDiscSides = 8;
-
-    const float r = mDiscLocalRadius;
-    const float h = mDiscLocalHalfThickness;
-
-    // Margin sized to the disc as it is actually simulated, not to Bullet's metre-scale default.
-    const float smallestWorldHalfExtent = glm::min(h, r) * uniformScale;
-    const float margin = glm::max(smallestWorldHalfExtent * 0.1f, 0.00001f);
-    const float localMargin = margin / uniformScale;
-
-    // The hull adds its margin on the outside, so build the points in by that much to keep the disc
-    // its true size.
-    const float hullR = glm::max(r - localMargin, r * 0.5f);
-    const float hullH = glm::max(h - localMargin, h * 0.5f);
-
-    btConvexHullShape* hull = new btConvexHullShape();
-
-    for (uint32_t i = 0; i < kDiscSides; ++i)
-    {
-        const float angle = (2.0f * PI * float(i)) / float(kDiscSides);
-        const float a = cosf(angle) * hullR;
-        const float b = sinf(angle) * hullR;
-
-        for (int32_t side = -1; side <= 1; side += 2)
-        {
-            const float t = hullH * float(side);
-
-            switch (mDiscFaceAxis)
-            {
-            case 0:  hull->addPoint(btVector3(t, a, b), false); break;
-            case 1:  hull->addPoint(btVector3(a, t, b), false); break;
-            default: hull->addPoint(btVector3(a, b, t), false); break;
-            }
-        }
-    }
-
-    hull->recalcLocalAabb();
-    hull->setMargin(margin);
-
-    // Scale first, then build the polyhedron: it is baked from the points as they are scaled at the
-    // time it is asked for, and the engine re-applies this same scale every frame without asking
-    // again. The discs never change scale, so this is stable.
-    hull->setLocalScaling(btVector3(uniformScale, uniformScale, uniformScale));
-    hull->initializePolyhedralFeatures();
-
-    return hull;
-}
-
 void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
 {
     World* world = GetWorld(0);
@@ -1636,10 +1414,49 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     // A disc is a cylinder. Built along whichever of the model's axes runs through its flat,
     // and in the model's own units, since the node's scale is applied to the shape on top.
     btCollisionShape* shape = nullptr;
+    const float r = mDiscLocalRadius;
+    const float h = mDiscLocalHalfThickness;
+
+    btVector3 halfExtents;
+    btCylinderShape* cylinder = nullptr;
+
+    switch (mDiscFaceAxis)
+    {
+    case 0:  halfExtents = btVector3(h, r, r); cylinder = new btCylinderShapeX(halfExtents); break;
+    case 1:  halfExtents = btVector3(r, h, r); cylinder = new btCylinderShape(halfExtents);  break;
+    default: halfExtents = btVector3(r, r, h); cylinder = new btCylinderShapeZ(halfExtents); break;
+    }
+
+    shape = cylinder;
+
+    // Size the collision margin to the disc's world size.
+    //
+    // This is the single reason the rerack never looked like physics. A margin is a rounded skin
+    // Bullet keeps around a convex shape, and it is the shape the solver actually collides with.
+    // Bullet's default is 0.04 -- chosen for a world measured in metres -- and, as its own header
+    // says, "collisionMargin is not scaled". The engine applies the node's world scale to the
+    // shape every frame; the margin is left exactly where it was.
+    //
+    // The discs sit under a transform at 0.03, so the cylinder's real dimensions scale down to
+    // thousandths of a unit while the margin stays put and ends up several times larger than the
+    // disc it is wrapping. What the solver sees is not a disc at all: it is a rounded blob with no
+    // flat face to lie on, no rim to roll along and no edge to tip over. Hence discs that will not
+    // tumble, rest at angles nothing could hold them at, and sink into one another -- and hence
+    // every attempt to fix those by adjusting gravity, friction, damping and solver iterations
+    // failing, because none of them were the problem.
+    //
+    // The margin has to be a fraction of the disc's size as it is actually simulated, and the core
+    // dimensions have to give that room back so the disc still ends up its true thickness. The
+    // shape is built in the model's units and scaled afterwards, so the margin -- which is not
+    // scaled -- is divided back out of the dimensions here.
     const glm::vec3 nodeScale = disc.mNode->GetWorldScale();
     const float uniformScale = glm::max(glm::min(glm::min(nodeScale.x, nodeScale.y), nodeScale.z), 0.0001f);
 
-    shape = MakeDiscShape(uniformScale);
+    const float smallestWorldHalfExtent = glm::min(h, r) * uniformScale;
+    const float margin = glm::max(smallestWorldHalfExtent * 0.1f, 0.00001f);
+
+    cylinder->setMargin(margin);
+    cylinder->setImplicitShapeDimensions(halfExtents - btVector3(margin, margin, margin) / uniformScale);
 
     disc.mNode->SetCollisionShape(shape);
 
@@ -1731,22 +1548,19 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
         // parameter for that case and it was simply never set.
         body->setSpinningFriction(0.08f);
 
-        // Sleep thresholds sized to the disc, not to Bullet's idea of a metre.
+        // Never let Bullet put these to sleep.
         //
-        // Bullet sleeps a body once it stays under a speed threshold for a couple of seconds, and
-        // the defaults -- 0.8 units per second of travel, 1.0 radians per second of turn -- assume
-        // a world measured in metres. A disc here is about fifteen thousandths of a unit across, so
-        // the default threshold is some fifty disc-radii per second: near enough everything counts
-        // as stationary. Discs fell asleep while still resolving against each other, froze half
-        // settled in poses nothing would hold, and ignored the torque meant to tip them over.
+        // A sleeping body stops being simulated and ignores anything done to it, and the threshold
+        // for sleeping was above the speeds at which a pile actually settles -- so discs were
+        // dropping below it while still resolving against each other and freezing exactly as they
+        // were, half settled, in poses nothing would hold. It also swallowed the torque meant to
+        // tip a standing disc over, leaving it to be laid flat by hand.
         //
-        // That was previously worked around by never letting them sleep at all, which is what kept
-        // all forty-two in the solver for the whole rerack and is most of what the rerack costs at
-        // a full board. Scaling the thresholds fixes the freezing and lets a settled pile drop out
-        // of the simulation, which are the same thing looked at from either end.
-        body->setSleepingThresholds(mDiscRadius * 0.6f, 0.5f);
-        body->setActivationState(ACTIVE_TAG);
-        body->activate(true);
+        // There is already a mechanism for deciding a disc has finished: it is retired when it
+        // stops going anywhere, which is measured over a couple of seconds rather than from an
+        // instantaneous speed. Two systems deciding the same thing, on different evidence, is what
+        // produced the odd poses -- so only one of them keeps the job.
+        body->setActivationState(DISABLE_DEACTIVATION);
 
         // Sweep the disc along its path instead of testing where it lands.
         //
@@ -1891,19 +1705,6 @@ void Connect4Scene::TipOverIfStanding(float deltaTime)
             continue;
         }
 
-        // Leave sleeping discs alone.
-        //
-        // AddAngularVelocity activates whatever it touches, so nudging a disc that has already
-        // settled wakes it and puts it straight back into the solver -- and this runs every frame,
-        // so between them they can keep a pile awake indefinitely. Sleeping is what makes a full
-        // board affordable, and this was quietly working against it.
-        btRigidBody* sleepCheck = disc.mNode->GetRigidBody();
-
-        if (sleepCheck != nullptr && !sleepCheck->isActive())
-        {
-            continue;
-        }
-
         const glm::vec3 normal = disc.mNode->GetWorldRotationQuat() * localNormal;
         const float uprightness = glm::abs(normal.y);
 
@@ -1959,37 +1760,6 @@ void Connect4Scene::UpdateDiscRetirement(float deltaTime)
 
         disc.mSlowTime += deltaTime;
         disc.mLiveTime += deltaTime;
-
-        btRigidBody* body = disc.mNode->GetRigidBody();
-
-        if (body != nullptr)
-        {
-            // Asleep means Bullet has decided it is finished, on two seconds of evidence. Retiring
-            // it takes it out of the world entirely rather than leaving it in the island as a
-            // sleeping body the solver still has to consider.
-            if (!body->isActive())
-            {
-                RetireDisc(disc);
-                continue;
-            }
-
-            // Swept collision only while it is actually moving fast enough to need it.
-            //
-            // CCD is what stops a disc passing through another during the fall, when it covers
-            // several times its own thickness in a step. A disc shuffling about in a settled pile
-            // covers none of that and gains nothing from the sweep, but pays for it every step --
-            // and at a full board most of the discs are in that state most of the time.
-            const float speed = glm::length(disc.mNode->GetLinearVelocity());
-
-            if (speed < mDiscHalfThickness * 30.0f)
-            {
-                body->setCcdMotionThreshold(0.0f);
-            }
-            else
-            {
-                body->setCcdMotionThreshold(mDiscHalfThickness);
-            }
-        }
 
         // Anything still going after this long is not going to settle. A disc spinning on its edge
         // can keep itself alive indefinitely, and there is no arrangement of friction and damping
@@ -2072,9 +1842,6 @@ void Connect4Scene::StopDiscPhysics()
         world->GetDynamicsWorld()->getSolverInfo().m_numIterations = mSavedSolverIterations;
         mSavedSolverIterations = 0;
     }
-
-    // And Bullet's own default, since it is a global and nothing else in the scene asked for this.
-    gDeactivationTime = 2.0f;
 
     mDiscPhysicsRunning = false;
 }
