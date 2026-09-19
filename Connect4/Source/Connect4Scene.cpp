@@ -110,6 +110,19 @@ const float kDiscRetireTime = 2.0f;
 // The longest any disc is simulated for. A backstop against one that never settles.
 const float kDiscMaxLiveTime = 8.0f;
 
+// The collision group the rerack runs in.
+//
+// Discs collide with each other, with the table and with the stand's feet, and with nothing else.
+// Everything in the scene has collision by default -- the frame, the stand, the room -- and a disc
+// sitting in its slot is inside the frame's own collision hull. Left on the default group the
+// discs were confined by the board they were supposed to be falling out of: they could not move
+// sideways at all, only shuffle where they stood while the solver pushed them out of the hull, and
+// then drop once the grid lifted clear of them.
+//
+// That is what "they barely move, then drop" was, and no amount of pushing them harder could have
+// helped, because they had nowhere to go.
+const uint8_t kRerackColGroup = ColGroup3;
+
 // How hard a disc left standing on its edge is leaned on, in radians per second squared. Enough to
 // get it past its balance point in a fraction of a second; gravity does the rest, which is the
 // whole point of doing this rather than rotating it by hand.
@@ -1221,6 +1234,11 @@ void Connect4Scene::BuildPhysicsColliders()
         box->SetMass(0.0f);
         box->SetFriction(0.7f);
         box->SetRestitution(0.1f);
+
+        // Only the discs, so these invisible boxes are not in the way of anything else in the room.
+        box->SetCollisionGroup(kRerackColGroup);
+        box->SetCollisionMask(kRerackColGroup);
+
         box->EnableCollision(true);
         box->EnablePhysics(true);
 
@@ -1465,6 +1483,11 @@ void Connect4Scene::ReleaseDisc(Disc& disc, uint32_t index)
     // to spend these on it and flatten the rolling in the process.
     disc.mNode->SetRollingFriction(0.012f);
     disc.mNode->SetAngularDamping(0.1f);
+
+    // Each other, the table and the stand's feet. Nothing else -- above all not the frame they
+    // are falling out of.
+    disc.mNode->SetCollisionGroup(kRerackColGroup);
+    disc.mNode->SetCollisionMask(kRerackColGroup);
 
     disc.mNode->EnableCollision(true);
     disc.mNode->EnablePhysics(true);
