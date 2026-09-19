@@ -607,21 +607,16 @@ bool Connect4Scene::Initialize()
     mSlotBeginSound = LoadAsset<SoundWave>("slot_begin");
     mSlotEndSound = LoadAsset<SoundWave>("slot_end");
 
-    // rerack3, falling back through the earlier takes if it is not there.
+    // rerack5, falling back through the earlier takes if it is not there.
     //
     // Not the original rerack unless nothing else can be found: it is stereo at 44 kHz, and what
     // costs here is decoded PCM rather than file size. These are the last assets loaded, so they
     // are the ones that find nothing left -- the original ran the machine out of memory.
-    mRerackSound = LoadAsset<SoundWave>("rerack3");
+    const char* rerackTakes[] = { "rerack5", "rerack3", "rerack2", "rerack" };
 
-    if (mRerackSound == nullptr)
+    for (uint32_t i = 0; i < 4 && mRerackSound == nullptr; ++i)
     {
-        mRerackSound = LoadAsset<SoundWave>("rerack2");
-    }
-
-    if (mRerackSound == nullptr)
-    {
-        mRerackSound = LoadAsset<SoundWave>("rerack");
+        mRerackSound = LoadAsset<SoundWave>(rerackTakes[i]);
     }
 
     LogDebug("C4: lift %.3f pull %.3f tableY %.3f frameBot %.3f rowY0 %.3f",
